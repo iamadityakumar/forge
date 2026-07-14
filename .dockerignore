@@ -1,0 +1,25 @@
+# VCS / metadata
+.git
+.gitignore
+
+# Local secrets & env
+.env
+.env.*
+
+# Build artifacts
+/bin
+*.exe
+*.test
+*.out
+coverage.*
+
+# Editor / OS
+.idea
+.vscode
+.DS_Store
+
+# Graph / notes (not needed at runtime)
+graphify-out
+.claude
+*.md
+!README.md
