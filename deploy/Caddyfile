@@ -8,5 +8,5 @@
 }
 
 4orge.duckdns.org {
-	reverse_proxy localhost:8080
+	reverse_proxy forge-orchestrator:8080
 }
