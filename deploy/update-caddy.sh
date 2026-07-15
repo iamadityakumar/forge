@@ -48,10 +48,14 @@ systemctl stop caddy 2>/dev/null || true
 pkill -f 'caddy run' 2>/dev/null || true
 sleep 2
 
-# 4. Install the static binary (no apt repo needed).
-echo "==> Installing Caddy binary ($GOARCH)"
-curl -fsSL --max-time 120 "https://caddyserver.com/api/v2/binaries/linux/${GOARCH}" -o "$CADDY_BIN"
-chmod +x "$CADDY_BIN"
+# 4. Install the static binary from the official GitHub release (reliable, version-pinned).
+CADDY_VERSION="${CADDY_VERSION:-2.8.4}"
+CADDY_URL="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${GOARCH}.tar.gz"
+echo "==> Installing Caddy binary (v${CADDY_VERSION}, ${GOARCH})"
+curl -fsSL --max-time 120 "$CADDY_URL" -o /tmp/caddy.tgz
+tar -xzf /tmp/caddy.tgz -C /tmp caddy
+install -m 0755 /tmp/caddy "$CADDY_BIN"
+rm -f /tmp/caddy.tgz
 echo "    $("$CADDY_BIN" version | head -1)"
 
 # 5. Write the Caddyfile.
