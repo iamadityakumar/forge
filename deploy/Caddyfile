@@ -3,10 +3,8 @@
 # Uses HTTP-01 challenge (DuckDNS record must point to this server).
 
 {
-	# Replace with your email for ACME / Let's Encrypt registration.
+	# Email for ACME / Let's Encrypt registration.
 	email iamadityakumar@users.noreply.github.com
-	# Automatic HTTP challenge for DuckDNS
-	acme_http_challenge
 }
 
 4orge.duckdns.org {
