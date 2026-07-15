@@ -1,15 +1,12 @@
 # Caddy reverse proxy for Forge (Step 6 — HTTPS via DuckDNS).
 # Caddy obtains and renews the TLS certificate automatically.
-#
-# Place this on the VM (e.g. /etc/caddy/Caddyfile or ./deploy/Caddyfile)
-# and run:  docker compose -f docker-compose.caddy.yml up -d
-# after setting DUCKDNS_TOKEN in the environment.
+# Uses HTTP-01 challenge (DuckDNS record must point to this server).
 
 {
-	# Replace with your email for ACME / Let's Encrypt registration.
-	email you@example.com
+	# Email for ACME / Let's Encrypt registration.
+	email iamadityakumar@users.noreply.github.com
 }
 
-<name>.duckdns.org {
-	reverse_proxy localhost:8080
+4orge.duckdns.org {
+	reverse_proxy forge-orchestrator:8080
 }
