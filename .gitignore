@@ -14,8 +14,23 @@ coverage.*
 # Env / secrets
 .env
 .env.*
+!.env.example
 
 # Editor / OS
 .idea/
 .vscode/
 .DS_Store
+
+# Personal / planning documentation (not part of the deployable app)
+CLAUDE.md
+MEMORY.md
+SelfNotes.md
+week1_plan.md
+week2_plan.md
+forge-implementation-plan.md
+FORGE_COMPLETE_BUILD_PLAN.md
+
+# Local notes / memory / graph artifacts (not part of the deployable app)
+graphify-out/
+.claude/
+skills-lock.json

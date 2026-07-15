@@ -37,5 +37,21 @@ services:
       postgres:
         condition: service_healthy
 
+  # Caddy (HTTPS reverse proxy for DuckDNS)
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DUCKDNS_DOMAIN: 4orge.duckdns.org
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   pgdata:

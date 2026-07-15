@@ -1,14 +1,10 @@
-#!/usr/bin/env bash
-# Run this ON the Oracle Cloud ARM VM (Ubuntu 22.04/24.04) as a user with sudo.
-#
+
 # What it does:
 #   1. Installs Docker + the docker compose plugin (if missing).
 #   2. Clones the Forge repo.
 #   3. Builds the image natively for linux/arm64 and starts the stack.
 #   4. Verifies POST /jobs returns a job id.
-#
-# Usage:
-#   REPO_URL=https://github.com/<you>/forge.git bash setup-vm.sh
+
 set -euo pipefail
 
 REPO_URL="${REPO_URL:?set REPO_URL, e.g. https://github.com/you/forge.git}"
