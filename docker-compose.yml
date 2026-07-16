@@ -30,9 +30,22 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # App is currently in-memory; DATABASE_URL is here for when the
-      # Postgres-backed store is wired in (Week 2+).
       DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Worker process — claims and executes jobs from the Postgres queue.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: forge-worker:latest
+    container_name: forge-worker-1
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
+      WORKER_ID: worker-1
     depends_on:
       postgres:
         condition: service_healthy

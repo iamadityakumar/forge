@@ -41,3 +41,7 @@ CREATE TABLE workers (
 -- Indexes for performance
 CREATE INDEX idx_job_steps_job_id ON job_steps(job_id);
 CREATE INDEX idx_jobs_created_at ON jobs(created_at);
+
+-- Composite index for the SKIP LOCKED claim query.
+-- Covers: WHERE status IN ('pending','claimed') ORDER BY priority DESC, created_at ASC
+CREATE INDEX idx_jobs_claimable ON jobs(status, priority DESC, created_at ASC);

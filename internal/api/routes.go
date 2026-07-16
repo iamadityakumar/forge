@@ -6,9 +6,9 @@ import (
 
 // RegisterRoutes wires the HTTP endpoints onto the provided chi router.
 func RegisterRoutes(r chi.Router, h *Handler) {
-	// POST /jobs will create a new job record.
-	r.Post("/jobs", h.createJobHandler)
+	r.Get("/health", h.healthHandler)
 
-	// GET /jobs/{id} will retrieve a job status.
+	r.Post("/jobs", h.createJobHandler)
+	r.Get("/jobs", h.listJobsHandler)
 	r.Get("/jobs/{id}", h.getJobHandler)
 }
