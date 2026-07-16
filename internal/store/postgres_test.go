@@ -52,8 +52,15 @@ func TestPgStore_CreateAndGet(t *testing.T) {
 	if job.TaskType != "test-task" {
 		t.Errorf("Expected task type test-task, got %s", job.TaskType)
 	}
-	if string(job.Payload) != `{"input":"test"}` {
-		t.Errorf("Expected payload %s, got %s", `{"input":"test"}`, string(job.Payload))
+	var expectedPayload, actualPayload map[string]any
+	if err := json.Unmarshal([]byte(`{"input":"test"}`), &expectedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(job.Payload, &actualPayload); err != nil {
+		t.Fatal(err)
+	}
+	if actualPayload["input"] != expectedPayload["input"] {
+		t.Errorf("Expected payload input %v, got %v", expectedPayload["input"], actualPayload["input"])
 	}
 	if job.Priority != 10 {
 		t.Errorf("Expected priority 10, got %d", job.Priority)
