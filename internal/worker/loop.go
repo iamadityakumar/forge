@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math/rand"
 	"time"
@@ -42,20 +43,24 @@ func Run(ctx context.Context, s store.JobStore, workerID string) error {
 			"attempt", job.AttemptCount,
 		)
 
-		// Transition: claimed → running
-		if err := s.StartJob(ctx, job.ID); err != nil {
+		// Transition: claimed → running (fenced by the epoch ClaimJob just minted).
+		if err := s.StartJob(ctx, job.ID, job.LeaseEpoch); err != nil {
 			slog.Error("start job failed", "job_id", job.ID, "error", err)
 			continue
 		}
 
 		// Execute the job (dummy for Week 2, replaced with agent loop in Week 4).
 		if err := executeJob(ctx, job); err != nil {
-			_ = s.FailJob(ctx, job.ID, err.Error())
+			if errors.Is(err, store.ErrFenced) {
+				slog.Warn("worker fenced during execution, abandoning job", "job_id", job.ID)
+				continue
+			}
+			_ = s.FailJob(ctx, job.ID, job.LeaseEpoch, err.Error())
 			slog.Error("job execution failed", "job_id", job.ID, "error", err)
 			continue
 		}
 
-		if err := s.CompleteJob(ctx, job.ID); err != nil {
+		if err := s.CompleteJob(ctx, job.ID, job.LeaseEpoch); err != nil {
 			slog.Error("complete job failed", "job_id", job.ID, "error", err)
 			continue
 		}
