@@ -22,7 +22,36 @@ type Job struct {
 	MaxAttempts    int             `json:"max_attempts"     db:"max_attempts"`
 	ErrorMessage   *string         `json:"error_message,omitempty"   db:"error_message"`
 	CreatedAt      time.Time       `json:"created_at"       db:"created_at"`
+
+	// Week 3 fields — fencing + scheduling + dead-letter.
+	LeaseEpoch  int        `json:"lease_epoch"              db:"lease_epoch"`
+	RunAt       *time.Time `json:"run_at,omitempty"         db:"run_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"   db:"completed_at"`
+	DeadLetter  bool       `json:"dead_letter"              db:"dead_letter"`
 }
+
+// JobStep is a single checkpointed, resumable step of a Job (the job_steps
+// table). Resumption on reclaim starts at MAX(step_number) WHERE status =
+// 'completed' + 1. For Week 3 the step_type is "segment" (dummy work); Week 4
+// replaces it with real plan / tool_call / observation steps.
+type JobStep struct {
+	ID         uuid.UUID       `json:"id"            db:"id"`
+	JobID      uuid.UUID       `json:"job_id"         db:"job_id"`
+	StepNumber int             `json:"step_number"    db:"step_number"`
+	StepType   string          `json:"step_type"      db:"step_type"`
+	Input      json.RawMessage `json:"input,omitempty"  db:"input"`
+	Output     json.RawMessage `json:"output,omitempty" db:"output"`
+	Status     string          `json:"status"         db:"status"`
+	DurationMs int             `json:"duration_ms"    db:"duration_ms"`
+	CreatedAt  time.Time       `json:"created_at"     db:"created_at"`
+}
+
+// JobStep status constants.
+const (
+	StepRunning   = "running"
+	StepCompleted = "completed"
+	StepFailed    = "failed"
+)
 
 // Job status constants — the only valid values for Job.Status.
 const (
