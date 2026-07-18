@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math/rand"
 	"time"
 
 	"forge/internal/store"
@@ -49,11 +48,15 @@ func Run(ctx context.Context, s store.JobStore, workerID string) error {
 			continue
 		}
 
-		// Execute the job (dummy for Week 2, replaced with agent loop in Week 4).
-		if err := executeJob(ctx, job); err != nil {
+		// Execute the job as a sequence of checkpointed, resumable segments
+		// (Week 2: opaque sleep; Week 3+: multi-step, fenced checkpoint loop).
+		if err := executeJob(ctx, s, job, job.LeaseEpoch); err != nil {
 			if errors.Is(err, store.ErrFenced) {
 				slog.Warn("worker fenced during execution, abandoning job", "job_id", job.ID)
 				continue
+			}
+			if errors.Is(err, context.Canceled) {
+				return err
 			}
 			_ = s.FailJob(ctx, job.ID, job.LeaseEpoch, err.Error())
 			slog.Error("job execution failed", "job_id", job.ID, "error", err)
@@ -65,19 +68,6 @@ func Run(ctx context.Context, s store.JobStore, workerID string) error {
 			continue
 		}
 		slog.Info("job completed", "worker_id", workerID, "job_id", job.ID)
-	}
-}
-
-// executeJob simulates work. In Week 4 this is replaced with the real
-// plan → tool call → observe agent loop.
-func executeJob(ctx context.Context, job *store.Job) error {
-	d := time.Duration(1+rand.Intn(3)) * time.Second
-	slog.Info("executing job (simulated)", "job_id", job.ID, "duration", d)
-	select {
-	case <-time.After(d):
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }
 

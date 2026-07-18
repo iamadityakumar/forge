@@ -79,9 +79,16 @@ func (m *memStore) ListJobs(_ context.Context, status string, limit int) ([]stor
 func (m *memStore) ClaimJob(_ context.Context, _ string, _ time.Duration) (*store.Job, error) {
 	return nil, nil
 }
-func (m *memStore) StartJob(_ context.Context, _ uuid.UUID, _ int) error           { return nil }
-func (m *memStore) CompleteJob(_ context.Context, _ uuid.UUID, _ int) error         { return nil }
-func (m *memStore) FailJob(_ context.Context, _ uuid.UUID, _ int, _ string) error   { return nil }
+func (m *memStore) StartJob(_ context.Context, _ uuid.UUID, _ int) error            { return nil }
+func (m *memStore) CompleteJob(_ context.Context, _ uuid.UUID, _ int) error          { return nil }
+func (m *memStore) FailJob(_ context.Context, _ uuid.UUID, _ int, _ string) error    { return nil }
+func (m *memStore) RecordStep(_ context.Context, _ uuid.UUID, _ int, _ store.JobStep) (uuid.UUID, error) {
+	return uuid.Nil, nil
+}
+func (m *memStore) LastCompletedStep(_ context.Context, _ uuid.UUID) (int, error) { return 0, nil }
+func (m *memStore) ListSteps(_ context.Context, _ uuid.UUID) ([]store.JobStep, error) {
+	return nil, nil
+}
 func (m *memStore) Heartbeat(_ context.Context, _ string, _ string) error  { return nil }
 func (m *memStore) Ping(_ context.Context) error                           { return nil }
 func (m *memStore) Close() error                                           { return nil }

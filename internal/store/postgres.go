@@ -269,6 +269,89 @@ func (s *PgStore) FailJob(ctx context.Context, jobID uuid.UUID, epoch int, reaso
 }
 
 // ---------------------------------------------------------------------------
+// Checkpointed steps (U4)
+// ---------------------------------------------------------------------------
+
+// RecordStep checkpoint-writes a single step, fenced by epoch. The C TE makes
+// the insert conditional on the caller still owning the job (lease_epoch
+// match); 0 rows ⇒ the caller was fenced ⇒ ErrFenced. ON CONFLICT makes a
+// re-recording of the same step_number an in-place update (idempotent), so a
+// zombie that re-awakes cannot create a duplicate or corrupt rows.
+func (s *PgStore) RecordStep(ctx context.Context, jobID uuid.UUID, epoch int, step JobStep) (uuid.UUID, error) {
+	query := `
+		WITH owned AS (
+		    SELECT 1 FROM jobs WHERE id = $1 AND lease_epoch = $2 FOR UPDATE
+		)
+		INSERT INTO job_steps (job_id, step_number, step_type, input, output, status, duration_ms)
+		SELECT $1, $3, $4, $5, $6, 'completed', $7 FROM owned
+		ON CONFLICT (job_id, step_number) DO UPDATE
+		SET output = EXCLUDED.output, status = EXCLUDED.status, duration_ms = EXCLUDED.duration_ms
+		RETURNING id
+	`
+	var id uuid.UUID
+	err := s.db.QueryRowContext(ctx, query,
+		jobID, epoch, step.StepNumber, step.StepType, step.Input, step.Output, step.DurationMs,
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return uuid.Nil, ErrFenced
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("record step: %w", err)
+	}
+	return id, nil
+}
+
+// LastCompletedStep returns the highest step_number recorded as 'completed' for
+// the job, or 0 if none. A reclaimed job resumes from this + 1.
+func (s *PgStore) LastCompletedStep(ctx context.Context, jobID uuid.UUID) (int, error) {
+	var step int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(step_number), 0) FROM job_steps
+		 WHERE job_id = $1 AND status = 'completed'`,
+		jobID,
+	).Scan(&step)
+	if err != nil {
+		return 0, fmt.Errorf("last completed step: %w", err)
+	}
+	return step, nil
+}
+
+// ListSteps returns all steps of a job ordered by step_number (for the trace
+// API and resumption diagnostics).
+func (s *PgStore) ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, job_id, step_number, step_type, input, output, status, duration_ms, created_at
+		 FROM job_steps WHERE job_id = $1 ORDER BY step_number ASC`,
+		jobID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list steps: %w", err)
+	}
+	defer rows.Close()
+	var steps []JobStep
+	for rows.Next() {
+		var st JobStep
+		// input/output are nullable JSONB; scan into []byte (database/sql maps
+		// NULL -> nil []byte) then convert, since *json.RawMessage is a named type
+		// database/sql won't treat as *[]byte.
+		var input, output []byte
+		if err := rows.Scan(
+			&st.ID, &st.JobID, &st.StepNumber, &st.StepType,
+			&input, &output, &st.Status, &st.DurationMs, &st.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan step row: %w", err)
+		}
+		st.Input = json.RawMessage(input)
+		st.Output = json.RawMessage(output)
+		steps = append(steps, st)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate steps: %w", err)
+	}
+	return steps, nil
+}
+
+// ---------------------------------------------------------------------------
 // Heartbeat
 // ---------------------------------------------------------------------------
 

@@ -308,13 +308,13 @@ verify recovery over HTTPS.
 
 | # | Task | Upgrade | Core/Stretch | Status |
 |---|------|---------|--------------|--------|
-| 0.1 | Restore deleted `postgres_test.go` | — | core | ☐ |
-| 1.1 | `JobStore` interface gains epoch-threaded methods | U1 | core | ☐ |
-| 1.2 | `ClaimJob`: increment+return epoch, reclaim `running`, gate `run_at` | U1,U3,U5 | core | ☐ |
-| 1.3 | Fence `StartJob`/`CompleteJob` (`AND lease_epoch=$epoch → ErrFenced`) | U1 | core | ☐ |
-| 2.1 | `RecordStep` fenced idempotent CTE upsert | U1,U4 | core | ☐ |
-| 2.2 | `LastCompletedStep` (`MAX(step_number)`) | U4 | core | ☐ |
-| 2.3 | Checkpointed multi-segment `executeJob` + resume-from-last | U4 | core | ☐ |
+| 0.1 | Restore deleted `postgres_test.go` | — | core | ☑ |
+| 1.1 | `JobStore` interface gains epoch-threaded methods | U1 | core | ☑ |
+| 1.2 | `ClaimJob`: increment+return epoch, reclaim `running`, gate `run_at` | U1,U3,U5 | core | ☑ |
+| 1.3 | Fence `StartJob`/`CompleteJob` (`AND lease_epoch=$epoch → ErrFenced`) | U1 | core | ☑ |
+| 2.1 | `RecordStep` fenced idempotent CTE upsert | U1,U4 | core | ☑ |
+| 2.2 | `LastCompletedStep` (`MAX(step_number)`) | U4 | core | ☑ |
+| 2.3 | Checkpointed multi-segment `executeJob` + resume-from-last | U4 | core | ☑ |
 | 3.1 | `RenewLease` fenced write | U2 | core | ☐ |
 | 3.2 | Per-job lease-extension goroutine + abandon-on-`ErrFenced` | U2 | core | ☐ |
 | 4.1 | `FailJob` branch: requeue (backoff+jitter) vs dead-letter | U5 | core | ☐ |

@@ -60,6 +60,19 @@ type JobStore interface {
 	// fenced by epoch.
 	FailJob(ctx context.Context, jobID uuid.UUID, epoch int, reason string) error
 
+	// RecordStep checkpoint-writes a single step of a job, fenced by epoch. The
+	// write only lands if the job's lease_epoch still matches; a mismatch (the
+	// worker was deposed) returns ErrFenced. Idempotent: re-recording the same
+	// step_number updates the row in place via ON CONFLICT.
+	RecordStep(ctx context.Context, jobID uuid.UUID, epoch int, step JobStep) (uuid.UUID, error)
+
+	// LastCompletedStep returns MAX(step_number) WHERE status='completed', or 0
+	// if none — the resumption point a reclaimed job starts from (+1).
+	LastCompletedStep(ctx context.Context, jobID uuid.UUID) (int, error)
+
+	// ListSteps returns the ordered steps of a job (for GET /jobs/{id}/trace).
+	ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, error)
+
 	// Heartbeat upserts a worker's heartbeat timestamp.
 	Heartbeat(ctx context.Context, workerID string, hostname string) error
 
