@@ -315,8 +315,8 @@ verify recovery over HTTPS.
 | 2.1 | `RecordStep` fenced idempotent CTE upsert | U1,U4 | core | ☑ |
 | 2.2 | `LastCompletedStep` (`MAX(step_number)`) | U4 | core | ☑ |
 | 2.3 | Checkpointed multi-segment `executeJob` + resume-from-last | U4 | core | ☑ |
-| 3.1 | `RenewLease` fenced write | U2 | core | ☐ |
-| 3.2 | Per-job lease-extension goroutine + abandon-on-`ErrFenced` | U2 | core | ☐ |
+| 3.1 | `RenewLease` fenced write | U2 | core | ☑ |
+| 3.2 | Per-job lease-extension goroutine + abandon-on-`ErrFenced` | U2 | core | ☑ |
 | 4.1 | `FailJob` branch: requeue (backoff+jitter) vs dead-letter | U5 | core | ☐ |
 | 4.2 | Dead-letter surfacing (`GET /jobs?status=dead_letter`) | U5 | core | ☐ |
 | 5.1 | Run 3–5 worker replicas in `docker-compose` | — | core | ☐ |

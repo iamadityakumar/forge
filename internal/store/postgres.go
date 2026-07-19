@@ -193,8 +193,9 @@ func (s *PgStore) ClaimJob(ctx context.Context, workerID string, leaseDuration t
 		          error_message, created_at, lease_epoch, run_at, completed_at, dead_letter
 	`
 
-	// Format lease duration as a Postgres interval (e.g. "120 seconds").
-	interval := fmt.Sprintf("%d seconds", int(leaseDuration.Seconds()))
+	// Format lease duration as a Postgres interval in ms (precise for short
+	// leases used in tests/demos; "60000 milliseconds" == 1 minute).
+	interval := fmt.Sprintf("%d milliseconds", leaseDuration.Milliseconds())
 
 	var job Job
 	err := s.db.QueryRowContext(ctx, query, workerID, interval).Scan(
@@ -349,6 +350,31 @@ func (s *PgStore) ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, er
 		return nil, fmt.Errorf("iterate steps: %w", err)
 	}
 	return steps, nil
+}
+
+// ---------------------------------------------------------------------------
+// RenewLease (U2: lease extension as the self-fencing alive-signal)
+// ---------------------------------------------------------------------------
+
+// RenewLease pushes a claimed/running job's lease forward while its worker is
+// alive, fenced by epoch. This is the heartbeat that also encodes ownership:
+// the holder renews every lease/3, so a healthy worker's lease never expires
+// (no false reclaim of a long job), and a deposed/zombie worker's renewal
+// returns ErrFenced (0 rows, epoch bumped by a reclaim) so it cancels the job
+// and stops pinning it. 0 rows ⇒ ErrFenced / ErrNotFound / ErrInvalidTransition.
+func (s *PgStore) RenewLease(ctx context.Context, jobID uuid.UUID, epoch int, lease time.Duration) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE jobs SET lease_expires_at = now() + $2::interval
+		 WHERE id = $1 AND lease_epoch = $3 AND status IN ('claimed','running')`,
+		jobID, fmt.Sprintf("%d milliseconds", lease.Milliseconds()), epoch,
+	)
+	if err != nil {
+		return fmt.Errorf("renew lease: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return s.classifyZeroRows(ctx, jobID, epoch)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

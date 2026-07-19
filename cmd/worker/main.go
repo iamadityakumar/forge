@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"forge/internal/store"
 	"forge/internal/worker"
@@ -43,12 +44,24 @@ func main() {
 		slog.Warn("initial heartbeat failed", "error", err)
 	}
 
+	// Per-job lease duration (default 2m). The worker renews it every lease/3
+	// while a job runs; an unresponsive worker's lease expires and the job is
+	// reclaimed. WORKER_LEASE accepts Go duration strings ("90s", "2m").
+	lease := 2 * time.Minute
+	if s := os.Getenv("WORKER_LEASE"); s != "" {
+		if d, err := time.ParseDuration(s); err == nil && d > 0 {
+			lease = d
+		} else {
+			slog.Warn("invalid WORKER_LEASE; using default", "value", s, "default", lease)
+		}
+	}
+
 	// Set up graceful shutdown via SIGINT/SIGTERM.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	// Run the polling loop — blocks until ctx is cancelled.
-	if err := worker.Run(ctx, pgStore, workerID); err != nil && err != context.Canceled {
+	if err := worker.Run(ctx, pgStore, workerID, lease); err != nil && err != context.Canceled {
 		log.Fatalf("worker stopped: %v", err)
 	}
 	slog.Info("worker shut down cleanly", "worker_id", workerID)

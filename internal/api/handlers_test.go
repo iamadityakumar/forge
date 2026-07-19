@@ -89,6 +89,7 @@ func (m *memStore) LastCompletedStep(_ context.Context, _ uuid.UUID) (int, error
 func (m *memStore) ListSteps(_ context.Context, _ uuid.UUID) ([]store.JobStep, error) {
 	return nil, nil
 }
+func (m *memStore) RenewLease(_ context.Context, _ uuid.UUID, _ int, _ time.Duration) error { return nil }
 func (m *memStore) Heartbeat(_ context.Context, _ string, _ string) error  { return nil }
 func (m *memStore) Ping(_ context.Context) error                           { return nil }
 func (m *memStore) Close() error                                           { return nil }

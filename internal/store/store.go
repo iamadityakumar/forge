@@ -73,6 +73,12 @@ type JobStore interface {
 	// ListSteps returns the ordered steps of a job (for GET /jobs/{id}/trace).
 	ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, error)
 
+	// RenewLease extends a claimed/running job's lease while the worker is
+	// alive, fenced by epoch. A 0-row write means the worker was deposed
+	// (ErrFenced) and must abandon the job — this makes a lease renewal the
+	// self-fencing alive-signal (U2): a zombie stops renewing AND stops the job.
+	RenewLease(ctx context.Context, jobID uuid.UUID, epoch int, lease time.Duration) error
+
 	// Heartbeat upserts a worker's heartbeat timestamp.
 	Heartbeat(ctx context.Context, workerID string, hostname string) error
 
