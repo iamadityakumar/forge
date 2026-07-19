@@ -62,6 +62,12 @@ const (
 	StatusFailed    = "failed"
 )
 
+// StatusDeadLetter is a VIRTUAL filter value (not a real Job.Status) accepted
+// by ListJobs: jobs whose execution exhausted max_attempts and were marked
+// dead_letter=true (status='failed', dead_letter=true). Surfaced via
+// GET /jobs?status=dead_letter. Real jobs are never stored with this value.
+const StatusDeadLetter = "dead_letter"
+
 // Worker is the record for each registered worker process.
 type Worker struct {
 	ID            string    `json:"id"             db:"id"`

@@ -317,8 +317,8 @@ verify recovery over HTTPS.
 | 2.3 | Checkpointed multi-segment `executeJob` + resume-from-last | U4 | core | ☑ |
 | 3.1 | `RenewLease` fenced write | U2 | core | ☑ |
 | 3.2 | Per-job lease-extension goroutine + abandon-on-`ErrFenced` | U2 | core | ☑ |
-| 4.1 | `FailJob` branch: requeue (backoff+jitter) vs dead-letter | U5 | core | ☐ |
-| 4.2 | Dead-letter surfacing (`GET /jobs?status=dead_letter`) | U5 | core | ☐ |
+| 4.1 | `FailJob` branch: requeue (backoff+jitter) vs dead-letter | U5 | core | ☑ |
+| 4.2 | Dead-letter surfacing (`GET /jobs?status=dead_letter`) | U5 | core | ☑ |
 | 5.1 | Run 3–5 worker replicas in `docker-compose` | — | core | ☐ |
 | 5.2 | `GET /jobs/{id}/trace` (step timeline) | U4 | core | ☐ |
 | 5.3 | `scripts/kill_recovery_test.sh` + screencap the demo | U1–U5 | core | ☐ |

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/google/uuid"
@@ -117,22 +118,58 @@ func (s *PgStore) GetJob(ctx context.Context, id uuid.UUID) (Job, error) {
 // ListJobs
 // ---------------------------------------------------------------------------
 
+// ListJobs returns jobs filtered by status. Empty status = all jobs.
+// status == StatusDeadLetter ("dead_letter") is a VIRTUAL filter: it returns
+// jobs that exhausted max_attempts (dead_letter=true), regardless of their
+// real status('failed'). This is how GET /jobs?status=dead_letter surfaces the
+// dead-letter queue (U5).
 func (s *PgStore) ListJobs(ctx context.Context, status string, limit int) ([]Job, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 
-	query := `
-		SELECT id, task_type, payload, status, priority, idempotency_key,
-		       claimed_by, lease_expires_at, attempt_count, max_attempts,
-		       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter
-		FROM jobs
-		WHERE ($1 = '' OR status = $1)
-		ORDER BY created_at DESC
-		LIMIT $2
-	`
+	var query string
+	switch status {
+	case StatusDeadLetter:
+		// Virtual dead-letter filter: poisoned jobs at any real status, though
+		// FailJob stores them at status='failed'.
+		query = `
+			SELECT id, task_type, payload, status, priority, idempotency_key,
+			       claimed_by, lease_expires_at, attempt_count, max_attempts,
+			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter
+			FROM jobs
+			WHERE dead_letter = true
+			ORDER BY created_at DESC
+			LIMIT $1
+		`
+		return s.scanJobs(ctx, query, limit)
+	case "":
+		query = `
+			SELECT id, task_type, payload, status, priority, idempotency_key,
+			       claimed_by, lease_expires_at, attempt_count, max_attempts,
+			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter
+			FROM jobs
+			ORDER BY created_at DESC
+			LIMIT $1
+		`
+		return s.scanJobs(ctx, query, limit)
+	default:
+		query = `
+			SELECT id, task_type, payload, status, priority, idempotency_key,
+			       claimed_by, lease_expires_at, attempt_count, max_attempts,
+			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter
+			FROM jobs
+			WHERE status = $1
+			ORDER BY created_at DESC
+			LIMIT $2
+		`
+		return s.scanJobs(ctx, query, status, limit)
+	}
+}
 
-	rows, err := s.db.QueryContext(ctx, query, status, limit)
+// scanJobs runs a job SELECT with the given args and scans the result.
+func (s *PgStore) scanJobs(ctx context.Context, query string, args ...any) ([]Job, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list jobs: %w", err)
 	}
@@ -251,17 +288,114 @@ func (s *PgStore) CompleteJob(ctx context.Context, jobID uuid.UUID, epoch int) e
 	return nil
 }
 
-// FailJob transitions a job from running → failed and records the reason,
-// fenced by epoch. (Phase 4 replaces the body with a requeue-vs-dead-letter
-// branch based on attempt_count < max_attempts.)
+// Retry backoff policy for requeued jobs. Package-level so tests can tighten
+// it for deterministic/tight timing (a future Phase-7 Clock/FakeLlm seam will
+// make this fully injection-based; for now overridable vars suffice).
+//
+//	backoff = min(cap, base * 2^(attempts-1)) + jitter
+//
+// 'attempts' is attempt_count at Fail time (the attempt that just failed,
+// already incremented by ClaimJob). A poisoned job therefore retries with
+// growing delay; once attempt_count >= max_attempts FailJob dead-letters
+// instead of requeuing.
+var (
+	backoffBase   = 2 * time.Second
+	backoffCap    = 5 * time.Minute
+	backoffJitter func() time.Duration = defaultBackoffJitter
+)
+
+// defaultBackoffJitter adds up to backoffBase of uniform jitter to a retry to
+// prevent thundering-herd retry storms. math/rand's top-level source is
+// concurrency-safe (locked) since Go 1.20, so this is fine under -race.
+func defaultBackoffJitter() time.Duration {
+	return time.Duration(rand.Int63n(int64(backoffBase) + 1)) // [0, base]
+}
+
+func computeBackoff(attempts int) time.Duration {
+	shift := attempts - 1
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > 20 { // guard against 1<<k overflow for absurd attempt counts
+		shift = 20
+	}
+	d := backoffBase * (1 << shift)
+	if d > backoffCap {
+		d = backoffCap
+	}
+	if j := backoffJitter(); j > 0 {
+		if d+j > backoffCap {
+			d = backoffCap
+		} else {
+			d += j
+		}
+	}
+	return d
+}
+
+// FailJob records a job's failure, fenced by epoch, and either requeues it for a
+// scheduled retry or dead-letters it:
+//
+//   - attempt_count < max_attempts → requeue: status='pending', claimed_by and
+//     lease cleared, run_at = now()+backoff, lease_epoch bumped (invalidating
+//     the old token). The run_at gate in ClaimJob (run_at <= now()) enforces the
+//     backoff delay before the job is claimable again.
+//   - attempt_count >= max_attempts → dead-letter: status='failed',
+//     dead_letter=true, completed_at=now(), recorded reason. Surfaced by
+//     GET /jobs?status=dead_letter.
+//
+// A deposed worker (epoch mismatch, or reclaimed between the read and the write)
+// gets ErrFenced and must not mutate the job. Reads attempt_count in a first
+// statement so the backoff can be computed in Go (keeping testability); the
+// fenced UPDATE then re-validates the epoch, so a race between read and write is
+// safe (the UPDATE affects zero rows → ErrFenced, and the computed backoff is
+// simply discarded).
 func (s *PgStore) FailJob(ctx context.Context, jobID uuid.UUID, epoch int, reason string) error {
+	var attemptCount, maxAttempts int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT attempt_count, max_attempts FROM jobs
+		 WHERE id = $1 AND lease_epoch = $2 AND status = 'running'`,
+		jobID, epoch,
+	).Scan(&attemptCount, &maxAttempts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return s.classifyZeroRows(ctx, jobID, epoch)
+	}
+	if err != nil {
+		return fmt.Errorf("fail job (read): %w", err)
+	}
+
+	if attemptCount >= maxAttempts {
+		// Terminal: dead-letter the poison message.
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE jobs
+			    SET status = 'failed', dead_letter = true, completed_at = now(),
+			        error_message = $3, claimed_by = NULL, lease_expires_at = NULL,
+			        run_at = NULL
+			  WHERE id = $1 AND lease_epoch = $2 AND status = 'running'`,
+			jobID, epoch, reason,
+		)
+		if err != nil {
+			return fmt.Errorf("fail job (dead-letter): %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return s.classifyZeroRows(ctx, jobID, epoch)
+		}
+		return nil
+	}
+
+	// Requeue: schedule a retry after backoff. Bumping lease_epoch invalidates
+	// the just-failed worker's fencing token.
+	delay := computeBackoff(attemptCount)
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE jobs SET status = 'failed', error_message = $3
-		 WHERE id = $1 AND status = 'running' AND lease_epoch = $2`,
-		jobID, epoch, reason,
+		`UPDATE jobs
+		    SET status = 'pending', claimed_by = NULL, lease_expires_at = NULL,
+		        run_at = now() + $3::interval, error_message = $4,
+		        lease_epoch = lease_epoch + 1
+		  WHERE id = $1 AND lease_epoch = $2 AND status = 'running'`,
+		jobID, epoch, fmt.Sprintf("%d milliseconds", delay.Milliseconds()), reason,
 	)
 	if err != nil {
-		return fmt.Errorf("fail job: %w", err)
+		return fmt.Errorf("fail job (requeue): %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return s.classifyZeroRows(ctx, jobID, epoch)

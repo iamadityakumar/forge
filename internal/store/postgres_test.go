@@ -145,7 +145,10 @@ func TestPgStore_StateTransitions(t *testing.T) {
 		t.Errorf("Expected status %s, got %s", StatusRunning, fetched.Status)
 	}
 
-	// Fail the job, fenced by the same epoch.
+	// Fail the job, fenced by the same epoch. With Phase 4, the first failure
+	// (attempt_count 1 < default max_attempts 3) REQUEUES the job back to
+	// 'pending' with a future run_at (retry with backoff), rather than
+	// dead-ending into 'failed'.
 	err = s.FailJob(ctx, job.ID, claimed.LeaseEpoch, "some failure reason")
 	if err != nil {
 		t.Fatalf("Failed to fail job: %v", err)
@@ -155,11 +158,19 @@ func TestPgStore_StateTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get job: %v", err)
 	}
-	if fetched.Status != StatusFailed {
-		t.Errorf("Expected status %s, got %s", StatusFailed, fetched.Status)
+	if fetched.Status != StatusPending {
+		t.Errorf("Expected requeued status %s (attempt 1 of 3 requeues), got %s", StatusPending, fetched.Status)
+	}
+	if fetched.RunAt == nil {
+		t.Error("Expected requeued job to have a future run_at (retry backoff)")
+	} else if fetched.RunAt.Before(time.Now()) {
+		t.Errorf("Expected run_at in the future, got %s", fetched.RunAt)
 	}
 	if fetched.ErrorMessage == nil || *fetched.ErrorMessage != "some failure reason" {
 		t.Errorf("Expected error message 'some failure reason', got %v", fetched.ErrorMessage)
+	}
+	if fetched.DeadLetter {
+		t.Error("Expected first failure to NOT be dead-lettered")
 	}
 }
 
@@ -309,5 +320,99 @@ func TestPgStore_FencingAndReclaimRunning(t *testing.T) {
 	}
 	if final.Status != StatusCompleted {
 		t.Errorf("expected final status completed, got %s", final.Status)
+	}
+}
+
+// TestPgStore_RetryAndDeadLetter proves U5 end to end: a job that keeps failing
+// is requeued to 'pending' with a future run_at that the claim gate respects
+// (ClaimJob returns nil until run_at elapses) until attempt_count reaches
+// max_attempts, after which FailJob dead-letters it and it surfaces via
+// ListJobs(status="dead_letter") while never being reclaimable again.
+func TestPgStore_RetryAndDeadLetter(t *testing.T) {
+	s, cleanup := getTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Tighten backoff so retry delays stay small; we still fast-forward run_at
+	// past between attempts to keep the test deterministic and fast.
+	prevBase := backoffBase
+	backoffBase = 100 * time.Millisecond
+	defer func() { backoffBase = prevBase }()
+
+	job, err := s.CreateJob(ctx, "poison", json.RawMessage(`{}`), 0, "")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	const maxAttempts = 3 // default max_attempts
+	var epoch int
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// After a requeue the job is 'pending' with run_at in the future, so
+		// model "the backoff elapsed" by moving run_at into the past.
+		if attempt > 1 {
+			if _, err := s.DB().ExecContext(ctx,
+				`UPDATE jobs SET run_at = now() - interval '1 second' WHERE id = $1`, job.ID,
+			); err != nil {
+				t.Fatalf("fast-forward run_at attempt %d: %v", attempt, err)
+			}
+		}
+		claimed, err := s.ClaimJob(ctx, "wrk", time.Minute)
+		if err != nil || claimed == nil || claimed.ID != job.ID {
+			t.Fatalf("claim before fail %d: job=%v err=%v", attempt, claimed, err)
+		}
+		if claimed.AttemptCount != attempt {
+			t.Errorf("claim %d: attempt_count got %d want %d", attempt, claimed.AttemptCount, attempt)
+		}
+		epoch = claimed.LeaseEpoch
+		if err := s.StartJob(ctx, job.ID, epoch); err != nil {
+			t.Fatalf("start %d: %v", attempt, err)
+		}
+		if err := s.FailJob(ctx, job.ID, epoch, "boom"); err != nil {
+			t.Fatalf("fail %d: %v", attempt, err)
+		}
+
+		got, _ := s.GetJob(ctx, job.ID)
+		if attempt < maxAttempts {
+			if got.Status != StatusPending {
+				t.Errorf("after fail %d: want status pending (requeued), got %s", attempt, got.Status)
+			}
+			if got.DeadLetter {
+				t.Errorf("after fail %d: should not be dead-lettered yet", attempt)
+			}
+			if got.RunAt == nil || got.RunAt.Before(time.Now()) {
+				t.Errorf("after fail %d: run_at should be in the future, got %v", attempt, got.RunAt)
+			}
+			// The run_at gate must hold: the job is not reclaimable until elapsed.
+			if stolen, err := s.ClaimJob(ctx, "wrk2", time.Minute); err != nil || stolen != nil {
+				t.Errorf("after requeue fail %d: ClaimJob should return nil (run_at in future), got job=%v err=%v", attempt, stolen, err)
+			}
+		} else {
+			if got.Status != StatusFailed {
+				t.Errorf("after fail %d: want status failed, got %s", attempt, got.Status)
+			}
+			if !got.DeadLetter {
+				t.Errorf("after fail %d: expected dead_letter=true", attempt)
+			}
+			if got.ErrorMessage == nil || *got.ErrorMessage != "boom" {
+				t.Errorf("after fail %d: error_message got %v want 'boom'", attempt, got.ErrorMessage)
+			}
+			if got.CompletedAt == nil {
+				t.Errorf("after fail %d: expected completed_at set (dead-letter is terminal)", attempt)
+			}
+		}
+	}
+
+	// A dead-lettered job must never be reclaimed (no record of it is claimable).
+	if stolen, err := s.ClaimJob(ctx, "wrk-late", time.Minute); err != nil || stolen != nil {
+		t.Errorf("dead-lettered job should never be reclaimed: got job=%v err=%v", stolen, err)
+	}
+	// And it must surface via the virtual dead_letter filter.
+	dl, err := s.ListJobs(ctx, StatusDeadLetter, 50)
+	if err != nil {
+		t.Fatalf("list dead_letter: %v", err)
+	}
+	if len(dl) != 1 || dl[0].ID != job.ID {
+		t.Errorf("expected exactly this job in dead_letter list, got %d entries", len(dl))
 	}
 }
