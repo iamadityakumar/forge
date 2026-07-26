@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -56,12 +57,24 @@ func main() {
 		}
 	}
 
+	// Number of jobs this worker runs at once (U6 bounded concurrency). Default
+	// 1 keeps a worker serial (the safe baseline); set higher to run that many
+	// jobs concurrently, each behind its own lease + fenced step loop.
+	concurrency := 1
+	if s := os.Getenv("WORKER_CONCURRENCY"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			concurrency = n
+		} else {
+			slog.Warn("invalid WORKER_CONCURRENCY; using default", "value", s, "default", concurrency)
+		}
+	}
+
 	// Set up graceful shutdown via SIGINT/SIGTERM.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	// Run the polling loop — blocks until ctx is cancelled.
-	if err := worker.Run(ctx, pgStore, workerID, lease); err != nil && err != context.Canceled {
+	if err := worker.Run(ctx, pgStore, workerID, lease, concurrency); err != nil && err != context.Canceled {
 		log.Fatalf("worker stopped: %v", err)
 	}
 	slog.Info("worker shut down cleanly", "worker_id", workerID)
