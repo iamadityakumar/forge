@@ -102,6 +102,43 @@ func (h *Handler) listJobsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /jobs/{id}/trace — the demo's money shot (U4)
+// ---------------------------------------------------------------------------
+
+// jobTraceHandler returns the ordered checkpointed steps of a job, so the
+// dashboard can render the live step timeline as a recovering job fills in
+// (segments 1..k appearing one at a time after a kill -> resume). A nonexistent
+// job yields 404 (validated via GetJob); a job with no steps yet yields [].
+func (h *Handler) jobTraceHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid job ID format")
+		return
+	}
+
+	if _, err := h.store.GetJob(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	} else if err != nil {
+		slog.Error("get job for trace failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get job")
+		return
+	}
+
+	steps, err := h.store.ListSteps(r.Context(), id)
+	if err != nil {
+		slog.Error("list steps failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list steps")
+		return
+	}
+	if steps == nil {
+		steps = []store.JobStep{} // never return null JSON
+	}
+	writeJSON(w, http.StatusOK, steps)
+}
+
+// ---------------------------------------------------------------------------
 // GET /health
 // ---------------------------------------------------------------------------
 

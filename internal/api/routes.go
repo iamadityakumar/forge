@@ -11,4 +11,5 @@ func RegisterRoutes(r chi.Router, h *Handler) {
 	r.Post("/jobs", h.createJobHandler)
 	r.Get("/jobs", h.listJobsHandler)
 	r.Get("/jobs/{id}", h.getJobHandler)
+	r.Get("/jobs/{id}/trace", h.jobTraceHandler)
 }
