@@ -16,10 +16,7 @@
 |------|--------|----------|
 | **Week 1** — API skeleton, schema, Oracle VM deploy, HTTPS | ✅ done & committed | `cmd/orchestrator`, `migrations/000001`, Caddy/DuckDNS commits (`37aa360`+). *Note: the checkbox table in `week1_plan.md` still marks DuckDNS/Caddy (6a–6d) ☐ — stale; the work landed in git.* |
 | **Week 2** — `SKIP LOCKED` claim, state machine, worker binary, `/jobs`, `/health`, full create schema, drain test | ✅ done & committed | `aa2560a` "wire Postgres store, add worker binary, SKIP LOCKED claim query"; tests `ca8429c`/`0bb58f0`; `scripts/drain_test.sh`. |
-| **Week 3** — fencing, checkpoints, lease extension, retry/DLQ, multi-worker, chaos test | 🟡 **~10% — scaffolding only** | See breakdown below. |
-
-**Net:** the project ships at the end of **Week 2**. **Week 3 is 90% unstarted** — only the
-schema/types groundwork exists; **none of the seven upgrades' *behavior* is wired yet.**
+| **Week 3** — fencing, checkpoints, lease extension, retry/DLQ, multi-worker, chaos test | 🟢 **Phases 1–5 done** (commits `ca24929`–`886affc` + uncommitted Phase 5); demo demonstrated live | U1–U5 wired & committed; Phase 5 (multi-worker, `GET /jobs/{id}/trace`, `scripts/kill_recovery_test.sh`) done & run twice — see [`docs/week3_demo.md`](docs/week3_demo.md). **Stretches U6/U7 (Phases 6–7) remain.** |
 
 ### Week 3 — done / in-progress / not started
 
@@ -240,6 +237,15 @@ document it.
 
 ## Phase 5 — Multi-worker + trace API + the demo
 
+> **Status: ✅ DONE & demonstrated live (2026-07-24).** All three tasks landed and
+> the crash-recovery demo ran successfully *twice* against a real 4-worker Docker
+> stack (`WORKER_LEASE=10s`): worker-4 `kill -9` → worker-2 reclaimed
+> (`lease_epoch 1→2`) & resumed; then worker-1 `kill -9` → worker-3 reclaimed.
+> Both runs: job reached `completed`, **20/20 segments checkpointed exactly once
+>**, no gaps. Full transcript + final job/trace evidence in
+> [`docs/week3_demo.md`](docs/week3_demo.md). The throwaway demo stack was torn
+> down afterward; the host's existing `forge-postgres` was left untouched.
+
 ### Task 5.1 — Run 3–5 workers concurrently
 `docker-compose.yml`: add `deploy.replicas: 4` (or explicit `worker-1..worker-4` services) each
 with a distinct `WORKER_ID`. The polling loop already supports N concurrent workers against one
@@ -266,6 +272,21 @@ README (this is the strongest interview artifact the project produces).
 
 ## Phase 6 — Stretch: bounded concurrency (U6) + invariant chaos test (U7)
 
+> **Status: ✅ DONE & demonstrated (2026-07-25).** Both stretches landed. **U6:**
+> `worker.Run` now runs up to `WORKER_CONCURRENCY` jobs at once behind
+> `golang.org/x/sync/semaphore` (each job owns its lease + fenced step loop,
+> rooted in the worker's cancellable context; structured concurrency drains all
+> in-flight work on shutdown). `WORKER_CONCURRENCY` is wired in `cmd/worker` and
+> the compose workers (default 1 = serial baseline). **U7:**
+> `internal/worker/chaos_test.go` runs a seeded-random killer against an in-memory
+> store emulating fencing + SKIP LOCKED + reclaim-running, asserting liveness +
+> exactly-once + no races; passes `go test -race -count=5` (all seeds) and its
+> **negative control** fails loudly when resume-from-checkpoint is broken
+> (`SAFETY VIOLATION: step … committed N times`). A live U6 capstone killed one
+> worker while 2 were in flight; the healthy worker reclaimed the orphan
+> (`lease_epoch 1→2`) **concurrently** with its own job — both 60-segment traces
+> exactly-once. See [`docs/week3_demo.md`](docs/week3_demo.md) §U6/U7.
+
 ### Task 6.1 — Bounded per-worker concurrency (U6)
 `worker.Run` runs up to `WORKER_CONCURRENCY` jobs behind
 `golang.org/x/sync/semaphore`, each owning its lease goroutine + fenced step loop, all rooted in
@@ -287,6 +308,25 @@ a passing test instead of a story — the interview material you cannot fake.
 
 ## Phase 7 — Restore & extend tests, then redeploy
 
+> **Status (2026-07-27).**
+> **7.1 — ✅:** the recovered Week-2 store integration tests
+> (`internal/store/postgres_test.go`) assert the fenced invariants — epoch
+> increments on claim, `running` reclaim, `ErrFenced` on a deposed worker's stale
+> `CompleteJob`, and the requeue-vs-dead-letter branch — and pass
+> `go test -race ./...` against a real Postgres (verified end-to-end against an
+> isolated throwaway stack with schema migrations 1→2→3 applied; exit 0). They
+> compile against the fenced `JobStore` because the Phase-1/Phase-4 commits
+> (`ca24929`/`886affc`) landed them, so this task was folded into those phases.
+> **7.2 — ✅:** `.github/workflows/ci.yml` runs on `push` + `pull_request`,
+> spins a `postgres:15` service, applies `migrations/*.up.sql` in order with
+> `psql`, then runs `go vet` / `go build` / `go test -race ./...` plus
+> `go test -race -count=5 ./internal/worker/...` (the U7 chaos fuzz, count>1 to
+> defeat the result cache). actionlint-clean; the chaos step passes locally
+> (~45s).
+> **7.3 — ☐ (production deploy; run on the Oracle VM):** rebuilds the live
+> stack over HTTPS — an outward-facing action run from the VM, not from the dev
+> worktree. The exact commands are appended to Task 7.3 below.
+
 ### Task 7.1 — Rewrite the recovered Week-2 tests against fenced signatures
 `internal/store/postgres_test.go`: concurrent-claim (task 2.5) + state-transition (task 2.6), now
 asserting epoch increments, `running` reclaim, `ErrFenced` on zombie writes, requeue-vs-DLQ branch.
@@ -299,6 +339,36 @@ it in CI has outsized signal.
 ### Task 7.3 — Reapply migration `000003` + redeploy to the Oracle VM
 `docker compose up -d --build`, run `scripts/kill_recovery_test.sh` against `https://4orge.duckdns.org`,
 verify recovery over HTTPS.
+
+> **Run this on the Oracle VM** (it rebuilds the live stack and `kill -9`s a
+> worker container over HTTPS — an outward-facing action, so it is run from the
+> VM, not from the dev worktree):
+>
+> ```bash
+> # 1. Get this branch on the VM (or however the VM pulls the code).
+> git checkout worktree-week3-plan && git pull
+>
+> # 2. migration 000003 is already applied on the VM's forge DB (commit 6d39fc0
+> #    migrated it). Re-apply ONLY if a Week-3 column is absent (no-op otherwise):
+> docker exec forge-postgres psql -U postgres -d forge -tAc \
+>   "SELECT column_name FROM information_schema.columns
+>    WHERE table_name='jobs' AND column_name='lease_epoch';" \
+>   | grep -q lease_epoch || psql "$DATABASE_URL" -f migrations/000003_fencing_checkpoints.up.sql
+>
+> # 3. Rebuild + redeploy with a SHORT per-job lease so reclaim-then-resume
+> #    happens ~10s after the kill instead of ~2m. WORKER_LEASE is read by
+> #    docker-compose.yml; the workers must (re)start with it.
+> WORKER_LEASE=10s docker compose up -d --build
+>
+> # 4. The thesis demo over HTTPS: submit a long multi-segment job, kill -9 the
+> #    owning worker mid-segment, and assert a DIFFERENT worker reclaims+resumes
+> #    with every segment checkpointed exactly once.
+> API_URL=https://4orge.duckdns.org WORKER_GLOB=forge-worker-? \
+>   bash scripts/kill_recovery_test.sh
+> ```
+>
+> Acceptance = the script prints `PASS: kill -9 -> different worker resumed from
+> checkpoint, exactly-once` and exits 0.
 
 ---
 
@@ -319,13 +389,13 @@ verify recovery over HTTPS.
 | 3.2 | Per-job lease-extension goroutine + abandon-on-`ErrFenced` | U2 | core | ☑ |
 | 4.1 | `FailJob` branch: requeue (backoff+jitter) vs dead-letter | U5 | core | ☑ |
 | 4.2 | Dead-letter surfacing (`GET /jobs?status=dead_letter`) | U5 | core | ☑ |
-| 5.1 | Run 3–5 worker replicas in `docker-compose` | — | core | ☐ |
-| 5.2 | `GET /jobs/{id}/trace` (step timeline) | U4 | core | ☐ |
-| 5.3 | `scripts/kill_recovery_test.sh` + screencap the demo | U1–U5 | core | ☐ |
-| 6.1 | Bounded per-worker concurrency (`semaphore`) | U6 | stretch | ☐ |
-| 6.2 | Invariant chaos test under `-race` | U7 | stretch | ☐ |
-| 7.1 | Rewrite Week-2 tests against fenced signatures | — | core | ☐ |
-| 7.2 | CI workflow (`go test -race` + Postgres service) | — | core | ☐ |
+| 5.1 | Run 3–5 worker replicas in `docker-compose` | — | core | ☑ |
+| 5.2 | `GET /jobs/{id}/trace` (step timeline) | U4 | core | ☑ |
+| 5.3 | `scripts/kill_recovery_test.sh` + screencap the demo | U1–U5 | core | ☑ |
+| 6.1 | Bounded per-worker concurrency (`semaphore`) | U6 | stretch | ☑ |
+| 6.2 | Invariant chaos test under `-race` (incl. negative control) | U7 | stretch | ☑ |
+| 7.1 | Rewrite Week-2 tests against fenced signatures | — | core | ☑ |
+| 7.2 | CI workflow (`go test -race` + Postgres service) | — | core | ☑ |
 | 7.3 | Migrate + redeploy to VM, run recovery over HTTPS | — | core | ☐ |
 
 ---

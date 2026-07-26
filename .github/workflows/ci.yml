@@ -1,0 +1,112 @@
+# CI for forge — Week 3, Phase 7.2.
+#
+# Why this exists: every Week-3 upgrade (fencing tokens, reclaim-running,
+# checkpointed steps, lease extension, retry/DLQ) is a claim that correctness
+# survives concurrent workers and hard crashes. `go test -race ./...` is
+# precisely what catches the subtle races the week introduces — two workers
+# racing a SKIP LOCKED claim, a zombie worker's stale fenced write landing, the
+# lease-renewal goroutine fighting the executor — so running it in CI has
+# outsized signal. The store integration tests (Task 7.1) and the U7 chaos test
+# (the project's thesis expressed as a passing test) both run here.
+#
+# A real postgres:15 container backs the store tests and gets the full schema
+# the way the deploy does: migrations/*.up.sql applied in order. There is no
+# app-level migrate step (the orchestrator does not auto-migrate on startup), so
+# CI applies the migrations directly with psql — the same sequence the Oracle-VM
+# stack receives.
+
+name: CI
+
+on:
+  push:
+    branches: [main, worktree-week3-plan]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Cancel a superseded run on the same ref so re-pushes don't queue up.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: go test -race
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: forge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d forge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Same DSN the docker-compose stack uses; the store integration tests read
+      # DATABASE_URL and skip (not fail) if unreachable — so the Apply-migrations
+      # step below doubling as a hard DB-reachability gate matters.
+      DATABASE_URL: postgres://postgres:secret@localhost:5432/forge?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Ensure psql client
+        # ubuntu-latest ships a psql; install only if it's somehow absent so the
+        # migration step never fails on "psql: command not found".
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends postgresql-client
+          fi
+          psql --version
+
+      - name: Apply migrations
+        # Glob expansion is lexicographic, so the zero-padded 000001/000002/000003
+        # sort correctly; future migrations slot in automatically. ON_ERROR_STOP
+        # makes this step the hard gate that the test DB actually has the Week-3
+        # schema (fencing columns, partial indexes, job_steps).
+        run: |
+          for f in migrations/*.up.sql; do
+            echo "::group::applying $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
+            echo "::endgroup::"
+          done
+          echo "schema applied:"
+          psql "$DATABASE_URL" -tAc "SELECT string_agg(column_name, ', ')
+               FROM information_schema.columns
+               WHERE table_name='jobs'
+                 AND column_name IN ('lease_epoch','run_at','completed_at','dead_letter');"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test -race ./...
+        # The headline: the whole module under -race, including the U7 chaos
+        # test (internal/worker) — the project thesis as a passing test.
+        run: go test -race ./...
+
+      - name: go test -race -count=5 (chaos fuzz)
+        # The chaos test's own header documents this exact command as the way to
+        # surface timing-dependent exactly-once regressions: -count>1 disables
+        # the result cache and re-runs the seeded-random killer five times under
+        # scheduling jitter, where the -race detector is most likely to catch a
+        # reclaim/step race. Default seed is fixed (a red run is reproducible); to
+        # widen the fuzz surface across CI runs, set CHAOS_SEED in this step's env.
+        run: go test -race -count=5 ./internal/worker/...
