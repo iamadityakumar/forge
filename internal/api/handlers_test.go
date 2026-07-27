@@ -18,11 +18,15 @@ import (
 // memStore is a minimal in-memory JobStore used for handler unit tests.
 // It avoids the need for a running Postgres in CI for basic HTTP tests.
 type memStore struct {
-	jobs map[uuid.UUID]store.Job
+	jobs   map[uuid.UUID]store.Job
+	steps  map[uuid.UUID][]store.JobStep
 }
 
 func newMemStore() *memStore {
-	return &memStore{jobs: make(map[uuid.UUID]store.Job)}
+	return &memStore{
+		jobs:  make(map[uuid.UUID]store.Job),
+		steps: make(map[uuid.UUID][]store.JobStep),
+	}
 }
 
 func (m *memStore) CreateJob(_ context.Context, taskType string, payload json.RawMessage, priority int, idempotencyKey string) (store.Job, error) {
@@ -66,7 +70,9 @@ func (m *memStore) GetJob(_ context.Context, id uuid.UUID) (store.Job, error) {
 func (m *memStore) ListJobs(_ context.Context, status string, limit int) ([]store.Job, error) {
 	var out []store.Job
 	for _, j := range m.jobs {
-		if status == "" || j.Status == status {
+		// status=="dead_letter" is a virtual filter (no real job carries it);
+		// the in-memory mock has no dead-letter jobs, so it returns [].
+		if status == "" || status == store.StatusDeadLetter || j.Status == status {
 			out = append(out, j)
 		}
 		if len(out) >= limit {
@@ -79,9 +85,17 @@ func (m *memStore) ListJobs(_ context.Context, status string, limit int) ([]stor
 func (m *memStore) ClaimJob(_ context.Context, _ string, _ time.Duration) (*store.Job, error) {
 	return nil, nil
 }
-func (m *memStore) StartJob(_ context.Context, _ uuid.UUID) error    { return nil }
-func (m *memStore) CompleteJob(_ context.Context, _ uuid.UUID) error  { return nil }
-func (m *memStore) FailJob(_ context.Context, _ uuid.UUID, _ string) error { return nil }
+func (m *memStore) StartJob(_ context.Context, _ uuid.UUID, _ int) error            { return nil }
+func (m *memStore) CompleteJob(_ context.Context, _ uuid.UUID, _ int) error          { return nil }
+func (m *memStore) FailJob(_ context.Context, _ uuid.UUID, _ int, _ string) error    { return nil }
+func (m *memStore) RecordStep(_ context.Context, _ uuid.UUID, _ int, _ store.JobStep) (uuid.UUID, error) {
+	return uuid.Nil, nil
+}
+func (m *memStore) LastCompletedStep(_ context.Context, _ uuid.UUID) (int, error) { return 0, nil }
+func (m *memStore) ListSteps(_ context.Context, id uuid.UUID) ([]store.JobStep, error) {
+	return m.steps[id], nil
+}
+func (m *memStore) RenewLease(_ context.Context, _ uuid.UUID, _ int, _ time.Duration) error { return nil }
 func (m *memStore) Heartbeat(_ context.Context, _ string, _ string) error  { return nil }
 func (m *memStore) Ping(_ context.Context) error                           { return nil }
 func (m *memStore) Close() error                                           { return nil }
@@ -213,5 +227,54 @@ func TestHealthEndpoint(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("want status %d, got %d", http.StatusOK, rr.Code)
+	}
+}
+
+func TestJobTrace(t *testing.T) {
+	ms := newMemStore()
+	h := NewHandler(ms)
+
+	created, _ := ms.CreateJob(context.Background(), "segments", json.RawMessage(`{}`), 0, "")
+	// Seed two checkpointed steps (the trace endpoint returns them ordered).
+	now := time.Now().UTC()
+	ms.steps[created.ID] = []store.JobStep{
+		{ID: uuid.New(), JobID: created.ID, StepNumber: 1, StepType: "segment", Status: store.StepCompleted, CreatedAt: now},
+		{ID: uuid.New(), JobID: created.ID, StepNumber: 2, StepType: "segment", Status: store.StepCompleted, CreatedAt: now},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+created.ID.String()+"/trace", nil)
+	rr := httptest.NewRecorder()
+	newTestRouter(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want status %d, got %d", http.StatusOK, rr.Code)
+	}
+	var steps []store.JobStep
+	if err := json.NewDecoder(rr.Body).Decode(&steps); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(steps) != 2 {
+		t.Fatalf("want 2 steps, got %d", len(steps))
+	}
+	for i, st := range steps {
+		if st.StepNumber != i+1 {
+			t.Errorf("steps not ordered: pos %d has step %d", i, st.StepNumber)
+		}
+		if st.JobID != created.ID {
+			t.Errorf("step %d job_id %v, want %v", i, st.JobID, created.ID)
+		}
+	}
+}
+
+func TestJobTraceNotFound(t *testing.T) {
+	h := NewHandler(newMemStore())
+
+	fakeID := uuid.New().String()
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+fakeID+"/trace", nil)
+	rr := httptest.NewRecorder()
+	newTestRouter(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("want status %d for unknown job, got %d", http.StatusNotFound, rr.Code)
 	}
 }
