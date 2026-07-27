@@ -35,8 +35,14 @@ services:
       postgres:
         condition: service_healthy
 
-  # Worker process — claims and executes jobs from the Postgres queue.
-  worker:
+  # Worker pool — 4 workers competing for jobs against one Postgres queue.
+  # Explicit services (rather than deploy.replicas) so each gets a distinct
+  # WORKER_ID, which the claim query stamps on claimed_by and the trace/logs
+  # use to prove a *different* worker resumed after a kill -9. Scale by adding
+  # more worker-N services. Each worker runs up to WORKER_CONCURRENCY jobs at
+  # once (U6 bounded concurrency, default 1 = serial); both WORKER_LEASE and
+  # WORKER_CONCURRENCY are env-overridable for the crash-recovery demo.
+  worker-1:
     build:
       context: .
       dockerfile: Dockerfile.worker
@@ -46,6 +52,56 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
       WORKER_ID: worker-1
+      WORKER_LEASE: ${WORKER_LEASE:-2m}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: forge-worker:latest
+    container_name: forge-worker-2
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
+      WORKER_ID: worker-2
+      WORKER_LEASE: ${WORKER_LEASE:-2m}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: forge-worker:latest
+    container_name: forge-worker-3
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
+      WORKER_ID: worker-3
+      WORKER_LEASE: ${WORKER_LEASE:-2m}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker-4:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: forge-worker:latest
+    container_name: forge-worker-4
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
+      WORKER_ID: worker-4
+      WORKER_LEASE: ${WORKER_LEASE:-2m}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
     depends_on:
       postgres:
         condition: service_healthy
