@@ -13,14 +13,34 @@ import (
 // depose triggers reclaim of the given job as if its holder crashed:
 // force the lease into the past so the next ClaimJob reclaims it (epoch++),
 // and claim from a second worker. Returns the reclaiming claim (new epoch).
+//
+// When the holder is still alive and renewing (the U2 lease extender renews
+// every lease/3), a single force-expire + ClaimJob is a race: the holder's
+// RenewLease can land between the force-expire and the reclaim, pushing
+// lease_expires_at back into the future and making the reclaimer's
+// `lease_expires_at < now()` predicate false — so ClaimJob returns nil,nil. That
+// is the system working as designed (a healthy renewer can't be deposed until a
+// reclaim wins the race), not a bug; the reaper just has to persist until it
+// lands a claim in a window the renewer didn't reclaim. So this retries
+// (force-expire + ClaimJob) until the reclaim succeeds, bounded by a deadline.
 func depose(t *testing.T, s *store.PgStore, workerID string, jobID any) *store.Job {
 	t.Helper()
-	expireLeaseTB(t, s, jobID)
-	b, err := s.ClaimJob(context.Background(), workerID, time.Minute)
-	if err != nil || b == nil {
-		t.Fatalf("depose: reclaim failed job=%v err=%v", b, err)
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for {
+		expireLeaseTB(t, s, jobID)
+		b, err := s.ClaimJob(context.Background(), workerID, time.Minute)
+		if err != nil {
+			lastErr = err
+		} else if b != nil {
+			return b
+		}
+		// Reclaim lost the race with a renewal this iteration; retry shortly.
+		if time.Now().After(deadline) {
+			t.Fatalf("depose: reclaim did not succeed within deadline (lastErr=%v) — the renewer kept beating the reclaimer", lastErr)
+		}
+		time.Sleep(3 * time.Millisecond)
 	}
-	return b
 }
 
 // TestExecuteWithLease_DeposedWorkerAborts proves the U2 safety side: once a
