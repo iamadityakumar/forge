@@ -16,7 +16,7 @@
 |------|--------|----------|
 | **Week 1** — API skeleton, schema, Oracle VM deploy, HTTPS | ✅ done & committed | `cmd/orchestrator`, `migrations/000001`, Caddy/DuckDNS commits (`37aa360`+). *Note: the checkbox table in `week1_plan.md` still marks DuckDNS/Caddy (6a–6d) ☐ — stale; the work landed in git.* |
 | **Week 2** — `SKIP LOCKED` claim, state machine, worker binary, `/jobs`, `/health`, full create schema, drain test | ✅ done & committed | `aa2560a` "wire Postgres store, add worker binary, SKIP LOCKED claim query"; tests `ca8429c`/`0bb58f0`; `scripts/drain_test.sh`. |
-| **Week 3** — fencing, checkpoints, lease extension, retry/DLQ, multi-worker, chaos test | 🟢 **Phases 1–5 done** (commits `ca24929`–`886affc` + uncommitted Phase 5); demo demonstrated live | U1–U5 wired & committed; Phase 5 (multi-worker, `GET /jobs/{id}/trace`, `scripts/kill_recovery_test.sh`) done & run twice — see [`docs/week3_demo.md`](docs/week3_demo.md). **Stretches U6/U7 (Phases 6–7) remain.** |
+| **Week 3** — fencing, checkpoints, lease extension, retry/DLQ, multi-worker, chaos test | ✅ **Phases 1–7 done** & committed (`ca24929`–`44e7d70`, merged to `main` as `cabe73b` via PR #1); live HTTPS demo PASS | U1–U7 wired, committed & CI-green; the crash-recovery thesis was demonstrated **live over `https://4orge.duckdns.org`** (2026-07-28, `DEMO_EXIT=0`: `kill -9 worker-4` mid-job → `worker-3` reclaimed `lease_epoch 1→2` & resumed from last checkpoint, 20/20 segments exactly-once) — see [`docs/week3_demo.md`](docs/week3_demo.md). |
 
 ### Week 3 — done / in-progress / not started
 
@@ -308,7 +308,7 @@ a passing test instead of a story — the interview material you cannot fake.
 
 ## Phase 7 — Restore & extend tests, then redeploy
 
-> **Status (2026-07-27).**
+> **Status (2026-07-28).** (7.1/7.2 unchanged since 2026-07-27; 7.3 landed 2026-07-28.)
 > **7.1 — ✅:** the recovered Week-2 store integration tests
 > (`internal/store/postgres_test.go`) assert the fenced invariants — epoch
 > increments on claim, `running` reclaim, `ErrFenced` on a deposed worker's stale
@@ -323,9 +323,26 @@ a passing test instead of a story — the interview material you cannot fake.
 > `go test -race -count=5 ./internal/worker/...` (the U7 chaos fuzz, count>1 to
 > defeat the result cache). actionlint-clean; the chaos step passes locally
 > (~45s).
-> **7.3 — ☐ (production deploy; run on the Oracle VM):** rebuilds the live
-> stack over HTTPS — an outward-facing action run from the VM, not from the dev
-> worktree. The exact commands are appended to Task 7.3 below.
+> **7.3 — ✅ (production deploy; run on the Oracle VM):** the Week-3 work is
+> merged to `main` as commit `cabe73b` (PR #1, 2026-07-27) — `git diff main
+> origin/worktree-week3-plan` is empty, so building `main` *is* the Week-3 code.
+> On the VM (`~/forge`, `main` @ `cabe73b`): migration `000003` was already
+> applied (`lease_epoch`/`run_at`/`completed_at`/`dead_letter` + `job_steps` all
+> present), so the re-apply guard was a no-op; the stack (already) runs with
+> `WORKER_LEASE=10s`, `WORKER_CONCURRENCY=1`, 4 workers, behind Caddy HTTPS at
+> `4orge.duckdns.org`. The crash-recovery demo was then run **over HTTPS against
+> `https://4orge.duckdns.org`** (2026-07-28, `DEMO_EXIT=0`): a 20-segment job was
+> claimed by `worker-4`, which checkpointed **1** segment and was `kill -9`'d
+> mid-job (no graceful drain). After the ~10s lease expiry a **different**
+> worker, `worker-3`, reclaimed it (`lease_epoch 1→2`, `attempt_count 1→2`,
+> `running→claimed`), read `LastCompletedStep`, resumed **from step 1** (steps
+> 1→3→4→…→20, never re-doing segment 1), and reached `completed`. `GET
+> /jobs/{id}/trace` returned **20 steps, all `status='completed'`,
+> `DISTINCT(step_number)=COUNT=20`** (exactly-once, no gaps) by two different
+> workers; the script printed the acceptance line `PASS: kill -9 -> different
+> worker resumed from checkpoint, exactly-once` and exited 0, then restarted
+> `worker-4` — fleet back to 4 healthy workers, restart policy restored to
+> `unless-stopped`. The replayable runbook remains appended to Task 7.3 below.
 
 ### Task 7.1 — Rewrite the recovered Week-2 tests against fenced signatures
 `internal/store/postgres_test.go`: concurrent-claim (task 2.5) + state-transition (task 2.6), now
@@ -396,7 +413,7 @@ verify recovery over HTTPS.
 | 6.2 | Invariant chaos test under `-race` (incl. negative control) | U7 | stretch | ☑ |
 | 7.1 | Rewrite Week-2 tests against fenced signatures | — | core | ☑ |
 | 7.2 | CI workflow (`go test -race` + Postgres service) | — | core | ☑ |
-| 7.3 | Migrate + redeploy to VM, run recovery over HTTPS | — | core | ☐ |
+| 7.3 | Migrate + redeploy to VM, run recovery over HTTPS | — | core | ☑ |
 
 ---
 
@@ -407,6 +424,15 @@ verify recovery over HTTPS.
 > completes. `GET /jobs/{id}/trace` shows every segment executed **exactly once**, by two different
 > workers, with zero gaps and zero duplicates — over `https://4orge.duckdns.org`. A poison-message
 > job lands in `dead_letter` after `max_attempts`.
+>
+> **✅ Demonstrated live over HTTPS (2026-07-28, `DEMO_EXIT=0`):** `worker-4` was
+> `kill -9`'d mid-job after **1/20** segments → a **different** worker,
+> `worker-3`, reclaimed it (`lease_epoch 1→2`, `attempt_count 1→2`,
+> `running→claimed`), read `LastCompletedStep`, resumed → `completed`. `trace`
+> shows **20 steps `completed`** with `DISTINCT(step_number)=COUNT=20`
+> (exactly-once, no gaps) by `worker-4` then `worker-3`; the killed worker was
+> restarted, fleet restored to 4 healthy. Script printed `PASS: kill -9 ->
+> different worker resumed from checkpoint, exactly-once`.
 
 ---
 
