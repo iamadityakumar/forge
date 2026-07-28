@@ -9,7 +9,12 @@
 # Test / coverage output
 *.test
 *.out
+*.prof
+*.pprof
 coverage.*
+
+# Local run / script logs
+*.log
 
 # Env / secrets
 .env
@@ -20,6 +25,17 @@ coverage.*
 .idea/
 .vscode/
 .DS_Store
+
+# Windows OS cruft (dev machines run Windows)
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Editor / merge backups
+*~
+*.orig
+*.swp
+*.swo
 
 # Personal / planning documentation (not part of the deployable app)
 CLAUDE.md
