@@ -1,4 +1,4 @@
-//go:build !windows
+﻿//go:build !windows
 
 package tools
 
@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os/exec"
 	"syscall"
-	"time"
 )
 
 func executePythonScript(ctx context.Context, dir, scriptPath, input string) (string, error) {
