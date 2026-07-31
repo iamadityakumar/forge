@@ -14,6 +14,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/worker ./cmd/worker
 
 # ---- Runtime stage ----
 FROM alpine:3.20
+# python3 runs the sandboxed solutions executed by the agent's run_tests tool.
+RUN apk add --no-cache python3
 WORKDIR /app
 COPY --from=build /out/worker /app/worker
 ENTRYPOINT ["/app/worker"]

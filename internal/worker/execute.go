@@ -5,10 +5,49 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math/rand"
+	"sync"
 	"time"
 
 	"forge/internal/store"
 )
+
+// Handler is a resumable, fenced, checkpointed executor for one task_type.
+// Implementations bake their own dependencies (LLM, tools, config) at construction
+// time (in cmd/worker/main.go) and do their own checkpointing via the UNCHANGED
+// store.RecordStep / LastCompletedStep / ListSteps — the worker package never imports
+// llm/tools/agent, so there is no import cycle.
+type Handler interface {
+	Run(ctx context.Context, s store.JobStore, job *store.Job, epoch int, workerID string) error
+}
+
+var (
+	handlerMu sync.Mutex
+	handlers  = map[string]Handler{}
+)
+
+// RegisterHandler binds a task_type → Handler. Called once at worker start (Phase 5).
+func RegisterHandler(taskType string, h Handler) {
+	handlerMu.Lock()
+	defer handlerMu.Unlock()
+	handlers[taskType] = h
+}
+
+// lookupHandler returns the registered handler, else the built-in segmentHandler.
+// Backwards-compat: unknown or legacy task_types — including the Week-3 "segments"
+// jobs and the live kill-recovery demo — keep running as segments.
+func lookupHandler(taskType string) Handler {
+	handlerMu.Lock()
+	defer handlerMu.Unlock()
+	if h, ok := handlers[taskType]; ok {
+		return h
+	}
+	return segmentHandler{}
+}
+
+// executeJob is now a one-line dispatcher (the lease/fence shell in loop.go is unchanged).
+func executeJob(ctx context.Context, s store.JobStore, job *store.Job, epoch int, workerID string) error {
+	return lookupHandler(job.TaskType).Run(ctx, s, job, epoch, workerID)
+}
 
 // StepTypeSegment is the job_steps.step_type recorded for each Week-3 dummy
 // segment. Week 4 replaces "segment" with real plan / tool_call / observation
@@ -29,14 +68,9 @@ var (
 	segmentMaxMs = 1200
 )
 
-// executeJob runs a job as a sequence of checkpointed, resumable segments
-// (U4: WAL/replay semantics — recovery is resumption, not restart). On a fresh
-// claim it starts at segment 1; after a reclaim it resumes from
-// LastCompletedStep+1, so already-completed segments are never re-run. Each
-// completed segment is fenced by the claim's epoch: if the worker was deposed
-// mid-job, RecordStep returns ErrFenced and execution aborts without writing a
-// stale checkpoint onto another worker's job.
-func executeJob(ctx context.Context, s store.JobStore, job *store.Job, epoch int) error {
+type segmentHandler struct{}
+
+func (segmentHandler) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch int, workerID string) error {
 	segments := decodeSegmentCount(job.Payload)
 	start, err := s.LastCompletedStep(ctx, job.ID)
 	if err != nil {
@@ -44,6 +78,7 @@ func executeJob(ctx context.Context, s store.JobStore, job *store.Job, epoch int
 	}
 	slog.Info("executing job",
 		"job_id", job.ID,
+		"task_type", job.TaskType,
 		"segments", segments,
 		"resume_from", start,
 		"remaining", segments-start,
@@ -63,6 +98,7 @@ func executeJob(ctx context.Context, s store.JobStore, job *store.Job, epoch int
 			StepType:   StepTypeSegment,
 			Output:     out,
 			DurationMs: durMs,
+			WorkerID:   workerID,
 		}); err != nil {
 			return err
 		}

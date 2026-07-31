@@ -122,7 +122,7 @@ func runOneJob(ctx context.Context, s store.JobStore, workerID string, job *stor
 	// Execute under a self-renewing lease: a per-job goroutine renews the
 	// lease every lease/3 (U2), cancelling the job the instant a renewal is
 	// fenced (the worker was deposed) so execution aborts immediately.
-	err := executeWithLease(ctx, s, job, lease)
+	err := executeWithLease(ctx, s, job, lease, workerID)
 	if err == nil {
 		if err := s.CompleteJob(ctx, job.ID, job.LeaseEpoch); err != nil {
 			if errors.Is(err, store.ErrFenced) {
@@ -171,7 +171,7 @@ func idleBackoff() time.Duration {
 // outlives the job. Returns store.ErrFenced if the worker was deposed (the
 // extender detected it mid-renew, or a fenced RecordStep did), else executeJob's
 // error (context.Canceled on worker shutdown).
-func executeWithLease(ctx context.Context, s store.JobStore, job *store.Job, lease time.Duration) error {
+func executeWithLease(ctx context.Context, s store.JobStore, job *store.Job, lease time.Duration, workerID string) error {
 	jobCtx, cancelJob := context.WithCancelCause(ctx)
 	defer cancelJob(context.Canceled)
 
@@ -181,7 +181,7 @@ func executeWithLease(ctx context.Context, s store.JobStore, job *store.Job, lea
 		extenderLoop(jobCtx, cancelJob, s, job.ID, job.LeaseEpoch, lease)
 	}()
 
-	err := executeJob(jobCtx, s, job, job.LeaseEpoch)
+	err := executeJob(jobCtx, s, job, job.LeaseEpoch, workerID)
 
 	// Stop the extender and wait for it to fully exit before returning.
 	cancelJob(context.Canceled)

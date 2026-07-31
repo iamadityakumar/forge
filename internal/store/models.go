@@ -44,6 +44,7 @@ type JobStep struct {
 	Status     string          `json:"status"         db:"status"`
 	DurationMs int             `json:"duration_ms"    db:"duration_ms"`
 	CreatedAt  time.Time       `json:"created_at"     db:"created_at"`
+	WorkerID   string          `json:"worker_id,omitempty" db:"worker_id"`
 }
 
 // JobStep status constants.

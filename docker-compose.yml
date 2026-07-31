@@ -54,6 +54,16 @@ services:
       WORKER_ID: worker-1
       WORKER_LEASE: ${WORKER_LEASE:-2m}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      LLM_BACKEND: ${LLM_BACKEND:-ollama}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-}
+      GROQ_MODEL: ${GROQ_MODEL:-}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-60s}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-10}
+      RUN_TESTS_TIMEOUT_MS: ${RUN_TESTS_TIMEOUT_MS:-2000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,6 +80,16 @@ services:
       WORKER_ID: worker-2
       WORKER_LEASE: ${WORKER_LEASE:-2m}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      LLM_BACKEND: ${LLM_BACKEND:-ollama}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-}
+      GROQ_MODEL: ${GROQ_MODEL:-}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-60s}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-10}
+      RUN_TESTS_TIMEOUT_MS: ${RUN_TESTS_TIMEOUT_MS:-2000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,6 +106,16 @@ services:
       WORKER_ID: worker-3
       WORKER_LEASE: ${WORKER_LEASE:-2m}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      LLM_BACKEND: ${LLM_BACKEND:-ollama}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-}
+      GROQ_MODEL: ${GROQ_MODEL:-}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-60s}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-10}
+      RUN_TESTS_TIMEOUT_MS: ${RUN_TESTS_TIMEOUT_MS:-2000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -102,6 +132,16 @@ services:
       WORKER_ID: worker-4
       WORKER_LEASE: ${WORKER_LEASE:-2m}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      LLM_BACKEND: ${LLM_BACKEND:-ollama}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-}
+      GROQ_MODEL: ${GROQ_MODEL:-}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-60s}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-10}
+      RUN_TESTS_TIMEOUT_MS: ${RUN_TESTS_TIMEOUT_MS:-2000}
     depends_on:
       postgres:
         condition: service_healthy

@@ -13,7 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"forge/internal/agent"
+	"forge/internal/llm"
 	"forge/internal/store"
+	"forge/internal/tools"
 	"forge/internal/worker"
 )
 
@@ -68,6 +71,28 @@ func main() {
 			slog.Warn("invalid WORKER_CONCURRENCY; using default", "value", s, "default", concurrency)
 		}
 	}
+
+	// Week 4: build the LLM backend (ollama | groq | fake) from env, the tool
+	// registry, and register the crash-recoverable cp_solve agent handler. Any
+	// other task_type falls back to the built-in segment handler (backwards
+	// compatible with all Week-3 jobs and demos).
+	backend, err := llm.NewFromEnv()
+	if err != nil {
+		log.Fatalf("failed to configure LLM backend: %v", err)
+	}
+	slog.Info("LLM backend selected", "backend", backend.Name())
+
+	reg := tools.NewRegistry()
+	if err := reg.Register(tools.NewSearchKBTool()); err != nil {
+		log.Fatalf("failed to register search_kb tool: %v", err)
+	}
+	if err := reg.Register(tools.NewRunTestsTool()); err != nil {
+		log.Fatalf("failed to register run_tests tool: %v", err)
+	}
+
+	agentHandler := agent.New(backend, reg)
+	worker.RegisterHandler("cp_solve", agentHandler)
+	slog.Info("registered agent handler", "task_type", "cp_solve", "max_steps", agentHandler.MaxSteps())
 
 	// Set up graceful shutdown via SIGINT/SIGTERM.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
