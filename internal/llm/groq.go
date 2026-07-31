@@ -1,4 +1,4 @@
-package llm
+﻿package llm
 
 import (
 	"bytes"
@@ -25,7 +25,7 @@ func NewGroqBackend(host, apiKey, model string, client *http.Client, maxRetries 
 		client = http.DefaultClient
 	}
 	if host == "" {
-		host = "https://api.groq.com"
+		host = "https://api.groq.com/openai/v1"
 	}
 	return &GroqBackend{
 		host:       strings.TrimRight(host, "/"),
@@ -81,7 +81,10 @@ func (g *GroqBackend) Complete(ctx context.Context, req CompleteRequest) (Comple
 			return CompleteResponse{}, fmt.Errorf("groq marshal: %w", err)
 		}
 
-		url := g.host + "/openai/v1/chat/completions"
+		url := g.host
+		if !strings.HasSuffix(url, "/chat/completions") {
+			url = url + "/chat/completions"
+		}
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 		if err != nil {
 			return CompleteResponse{}, fmt.Errorf("groq req build: %w", err)
