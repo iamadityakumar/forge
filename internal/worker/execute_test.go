@@ -96,7 +96,7 @@ func TestExecuteJob_CheckpointAndResume(t *testing.T) {
 	}
 
 	// B resumes: executeJob reads LastCompletedStep=2 and runs 3–5 only.
-	if err := executeJob(ctx, s, b, b.LeaseEpoch); err != nil {
+	if err := executeJob(ctx, s, b, b.LeaseEpoch, "wrk-b"); err != nil {
 		t.Fatalf("B executeJob: %v", err)
 	}
 	if err := s.CompleteJob(ctx, job.ID, b.LeaseEpoch); err != nil {
@@ -178,5 +178,33 @@ func TestRecordStep_FencedAfterDepose(t *testing.T) {
 		JobID: job.ID, StepNumber: 1, StepType: StepTypeSegment, Output: json.RawMessage(`{"step":1}`),
 	}); err != nil {
 		t.Fatalf("B RecordStep with fresh epoch: %v", err)
+	}
+}
+
+type mockHandler struct {
+	called bool
+	gotWorkerID string
+}
+
+func (m *mockHandler) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch int, workerID string) error {
+	m.called = true
+	m.gotWorkerID = workerID
+	return nil
+}
+
+func TestRegisterHandler(t *testing.T) {
+	h := &mockHandler{}
+	RegisterHandler("test-custom-task", h)
+
+	job := &store.Job{TaskType: "test-custom-task"}
+	err := executeJob(context.Background(), nil, job, 1, "test-worker-123")
+	if err != nil {
+		t.Fatalf("executeJob custom handler: %v", err)
+	}
+	if !h.called {
+		t.Errorf("custom handler was not called")
+	}
+	if h.gotWorkerID != "test-worker-123" {
+		t.Errorf("got workerID %q, want %q", h.gotWorkerID, "test-worker-123")
 	}
 }

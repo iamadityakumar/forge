@@ -417,15 +417,16 @@ func (s *PgStore) RecordStep(ctx context.Context, jobID uuid.UUID, epoch int, st
 		WITH owned AS (
 		    SELECT 1 FROM jobs WHERE id = $1 AND lease_epoch = $2 FOR UPDATE
 		)
-		INSERT INTO job_steps (job_id, step_number, step_type, input, output, status, duration_ms)
-		SELECT $1, $3, $4, $5, $6, 'completed', $7 FROM owned
+		INSERT INTO job_steps (job_id, step_number, step_type, input, output, status, duration_ms, worker_id)
+		SELECT $1, $3, $4, $5, $6, 'completed', $7, NULLIF($8,'') FROM owned
 		ON CONFLICT (job_id, step_number) DO UPDATE
-		SET output = EXCLUDED.output, status = EXCLUDED.status, duration_ms = EXCLUDED.duration_ms
+		SET output = EXCLUDED.output, status = EXCLUDED.status,
+		    duration_ms = EXCLUDED.duration_ms, worker_id = EXCLUDED.worker_id
 		RETURNING id
 	`
 	var id uuid.UUID
 	err := s.db.QueryRowContext(ctx, query,
-		jobID, epoch, step.StepNumber, step.StepType, step.Input, step.Output, step.DurationMs,
+		jobID, epoch, step.StepNumber, step.StepType, step.Input, step.Output, step.DurationMs, step.WorkerID,
 	).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return uuid.Nil, ErrFenced
@@ -455,7 +456,7 @@ func (s *PgStore) LastCompletedStep(ctx context.Context, jobID uuid.UUID) (int, 
 // API and resumption diagnostics).
 func (s *PgStore) ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, job_id, step_number, step_type, input, output, status, duration_ms, created_at
+		`SELECT id, job_id, step_number, step_type, input, output, status, duration_ms, created_at, worker_id
 		 FROM job_steps WHERE job_id = $1 ORDER BY step_number ASC`,
 		jobID,
 	)
@@ -470,14 +471,18 @@ func (s *PgStore) ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, er
 		// NULL -> nil []byte) then convert, since *json.RawMessage is a named type
 		// database/sql won't treat as *[]byte.
 		var input, output []byte
+		var workerID sql.NullString
 		if err := rows.Scan(
 			&st.ID, &st.JobID, &st.StepNumber, &st.StepType,
-			&input, &output, &st.Status, &st.DurationMs, &st.CreatedAt,
+			&input, &output, &st.Status, &st.DurationMs, &st.CreatedAt, &workerID,
 		); err != nil {
 			return nil, fmt.Errorf("scan step row: %w", err)
 		}
 		st.Input = json.RawMessage(input)
 		st.Output = json.RawMessage(output)
+		if workerID.Valid {
+			st.WorkerID = workerID.String
+		}
 		steps = append(steps, st)
 	}
 	if err := rows.Err(); err != nil {

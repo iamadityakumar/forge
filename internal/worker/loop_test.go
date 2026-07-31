@@ -70,7 +70,7 @@ func TestExecuteWithLease_DeposedWorkerAborts(t *testing.T) {
 	// Short lease (150ms, renewed every 50ms) so fencing is detected quickly.
 	lease := 150 * time.Millisecond
 	errCh := make(chan error, 1)
-	go func() { errCh <- executeWithLease(ctx, s, a, lease) }()
+	go func() { errCh <- executeWithLease(ctx, s, a, lease, "worker-a") }()
 
 	// Let the worker run a couple of renewal cycles first (so the extender is
 	// genuinely alive and renewing), then depose it with a second claim.
@@ -136,7 +136,7 @@ func TestExecuteWithLease_AliveWorkerCompletes(t *testing.T) {
 	// run a competitor here; the point is that executeWithLease must not fence
 	// itself and must drain all 4 segments to completion.
 	lease := 1 * time.Second
-	if err := executeWithLease(ctx, s, a, lease); err != nil {
+	if err := executeWithLease(ctx, s, a, lease, "worker-a"); err != nil {
 		t.Fatalf("alive executeWithLease: want nil, got %v", err)
 	}
 	if err := s.CompleteJob(ctx, job.ID, a.LeaseEpoch); err != nil {
