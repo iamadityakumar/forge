@@ -6,22 +6,31 @@ import (
 	"log/slog"
 	"time"
 
+	"forge/internal/metrics"
 	"forge/internal/ratelimit"
 )
 
 // RateLimitedBackend decorates an LLMBackend with rate limiting, reserving estimated prompt cost,
 // logging backpressure WARN when waiting, and settling actual token usage post-call.
 type RateLimitedBackend struct {
-	backend LLMBackend
-	limiter ratelimit.Limiter
+	backend      LLMBackend
+	limiter      ratelimit.Limiter
+	metricsStore *metrics.Metrics
 }
 
 // NewRateLimitedBackend wraps an underlying LLMBackend with the given ratelimit.Limiter.
-func NewRateLimitedBackend(backend LLMBackend, limiter ratelimit.Limiter) *RateLimitedBackend {
-	return &RateLimitedBackend{
+// An optional *metrics.Metrics store seeds Prometheus counters; when omitted the
+// decorator stays a silent no-op (the metrics methods are nil-safe), so the core
+// phases keep zero observability dependencies.
+func NewRateLimitedBackend(backend LLMBackend, limiter ratelimit.Limiter, metricsOpt ...*metrics.Metrics) *RateLimitedBackend {
+	r := &RateLimitedBackend{
 		backend: backend,
 		limiter: limiter,
 	}
+	if len(metricsOpt) > 0 {
+		r.metricsStore = metricsOpt[0]
+	}
+	return r
 }
 
 func (r *RateLimitedBackend) Name() string {
@@ -53,7 +62,10 @@ func (r *RateLimitedBackend) Complete(ctx context.Context, req CompleteRequest) 
 		case <-ctx.Done():
 			return CompleteResponse{}, ctx.Err()
 		case <-time.After(res.WaitDuration):
-			slog.Info("rate limit wait complete", "waited_ms", time.Since(t0).Milliseconds())
+			waited := time.Since(t0)
+			r.metricsStore.Inc("forge_rate_limit_waits_total", nil)
+			r.metricsStore.Add("forge_rate_limit_wait_seconds", nil, waited.Seconds())
+			slog.Info("rate limit wait complete", "waited_ms", waited.Milliseconds())
 		}
 
 		// Re-attempt reservation after wait
@@ -78,6 +90,15 @@ func (r *RateLimitedBackend) Complete(ctx context.Context, req CompleteRequest) 
 		}
 		return CompleteResponse{}, err
 	}
+
+	// Metrics: record the completed LLM call and its actual token usage.
+	r.metricsStore.Inc("forge_llm_calls_total", []metrics.Label{{Name: "backend", Value: r.backend.Name()}})
+	r.metricsStore.Add("forge_llm_tokens_total",
+		[]metrics.Label{{Name: "backend", Value: r.backend.Name()}, {Name: "kind", Value: "prompt"}},
+		float64(resp.Usage.PromptTokens))
+	r.metricsStore.Add("forge_llm_tokens_total",
+		[]metrics.Label{{Name: "backend", Value: r.backend.Name()}, {Name: "kind", Value: "completion"}},
+		float64(resp.Usage.CompletionTokens))
 
 	// Settle actual tokens consumed
 	if res.Settle != nil {

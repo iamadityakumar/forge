@@ -50,6 +50,8 @@ services:
     image: forge-worker:latest
     container_name: forge-worker-1
     restart: unless-stopped
+    ports:
+      - "9091:9091"
     environment:
       DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
       WORKER_ID: worker-1
@@ -70,6 +72,7 @@ services:
       RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
       UPSTASH_URL: ${UPSTASH_URL:-}
       UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
+      METRICS_PORT: ${METRICS_PORT:-9091}
     depends_on:
       postgres:
         condition: service_healthy
@@ -101,6 +104,7 @@ services:
       RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
       UPSTASH_URL: ${UPSTASH_URL:-}
       UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
+      METRICS_PORT: ${METRICS_PORT:-9091}
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,6 +136,7 @@ services:
       RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
       UPSTASH_URL: ${UPSTASH_URL:-}
       UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
+      METRICS_PORT: ${METRICS_PORT:-9091}
     depends_on:
       postgres:
         condition: service_healthy
@@ -163,6 +168,7 @@ services:
       RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
       UPSTASH_URL: ${UPSTASH_URL:-}
       UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
+      METRICS_PORT: ${METRICS_PORT:-9091}
     depends_on:
       postgres:
         condition: service_healthy
