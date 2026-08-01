@@ -1,4 +1,4 @@
-package store
+﻿package store
 
 import (
 	"encoding/json"
@@ -45,6 +45,20 @@ type JobStep struct {
 	DurationMs int             `json:"duration_ms"    db:"duration_ms"`
 	CreatedAt  time.Time       `json:"created_at"     db:"created_at"`
 	WorkerID   string          `json:"worker_id,omitempty" db:"worker_id"`
+}
+
+// LLMCall tracks an individual LLM call performed for a job.
+type LLMCall struct {
+	ID               uuid.UUID `json:"id"                db:"id"`
+	JobID            uuid.UUID `json:"job_id"            db:"job_id"`
+	WorkerID         *string   `json:"worker_id,omitempty" db:"worker_id"`
+	Backend          string    `json:"backend"           db:"backend"`
+	PromptTokens     int       `json:"prompt_tokens"     db:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens" db:"completion_tokens"`
+	EstimatedTokens  int       `json:"estimated_tokens"  db:"estimated_tokens"`
+	LatencyMs        int       `json:"latency_ms"        db:"latency_ms"`
+	Error            *string   `json:"error,omitempty"    db:"error"`
+	CreatedAt        time.Time `json:"created_at"        db:"created_at"`
 }
 
 // JobStep status constants.

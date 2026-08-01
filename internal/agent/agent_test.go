@@ -1,4 +1,4 @@
-package agent
+﻿package agent
 
 import (
 	"context"
@@ -23,12 +23,14 @@ type memoryStore struct {
 	mu    sync.Mutex
 	jobs  map[string]*store.Job
 	steps map[string][]store.JobStep
+	llmCalls map[string][]store.LLMCall
 }
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{
 		jobs:  make(map[string]*store.Job),
 		steps: make(map[string][]store.JobStep),
+		llmCalls: make(map[string][]store.LLMCall),
 	}
 }
 
@@ -45,6 +47,18 @@ func (m *memoryStore) CreateJob(ctx context.Context, taskType string, payload js
 	}
 	m.jobs[j.ID.String()] = j
 	return *j, nil
+}
+
+func (m *memoryStore) CountPendingJobs(ctx context.Context) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int
+	for _, j := range m.jobs {
+		if j.Status == store.StatusPending {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (m *memoryStore) GetJob(ctx context.Context, id uuid.UUID) (store.Job, error) {
@@ -206,7 +220,7 @@ func TestAgentLoop_ResumeMidIterationAfterDepose(t *testing.T) {
 	)
 
 	// Worker-1 runs against a store that depose-fences it right after the first
-	// plan row commits — the exact kill window the plan is designed around.
+	// plan row commits â€” the exact kill window the plan is designed around.
 	deposingStore := &deposeAfterPlanStore{
 		memoryStore: ms,
 		targetStep:  1,
@@ -269,7 +283,7 @@ func TestAgentLoop_ResumeMidIterationAfterDepose(t *testing.T) {
 }
 
 // deposeAfterPlanStore records the target step, then bumps the job's epoch and
-// returns ErrFenced — simulating a concurrent reclaim beating us to the write.
+// returns ErrFenced â€” simulating a concurrent reclaim beating us to the write.
 type deposeAfterPlanStore struct {
 	*memoryStore
 	targetStep int
@@ -407,5 +421,69 @@ func TestReconstructHistory_CompleteIteration(t *testing.T) {
 	}
 	if len(messages) != 5 {
 		t.Errorf("expected 5 messages, got %d", len(messages))
+	}
+}
+
+func (m *memoryStore) RecordLLMCall(ctx context.Context, call store.LLMCall) (uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if call.ID == uuid.Nil {
+		call.ID = uuid.New()
+	}
+	if m.llmCalls == nil {
+		m.llmCalls = make(map[string][]store.LLMCall)
+	}
+	m.llmCalls[call.JobID.String()] = append(m.llmCalls[call.JobID.String()], call)
+	return call.ID, nil
+}
+
+func (m *memoryStore) ListLLMCalls(ctx context.Context, jobID uuid.UUID) ([]store.LLMCall, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.llmCalls == nil {
+		return []store.LLMCall{}, nil
+	}
+	calls := m.llmCalls[jobID.String()]
+	if calls == nil {
+		calls = []store.LLMCall{}
+	}
+	return append([]store.LLMCall(nil), calls...), nil
+}
+
+
+func TestCompleteAndRecord(t *testing.T) {
+	ms := newMemoryStore()
+	job, _ := ms.CreateJob(context.Background(), "cp_solve", json.RawMessage("{}"), 0, "")
+
+	fakeLLM := llm.NewFakeBackend(llm.CompleteResponse{
+		Content: "hello",
+		Usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 5},
+	})
+	ag := New(fakeLLM, tools.NewRegistry())
+
+	req := llm.CompleteRequest{
+		Messages: []llm.Message{{Role: "user", Content: "test"}},
+	}
+
+	resp, err := ag.completeAndRecord(context.Background(), ms, job.ID, "w-123", req)
+	if err != nil {
+		t.Fatalf("completeAndRecord failed: %v", err)
+	}
+	if resp.Content != "hello" {
+		t.Errorf("expected 'hello', got %q", resp.Content)
+	}
+
+	calls, err := ms.ListLLMCalls(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListLLMCalls failed: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 LLM call recorded, got %d", len(calls))
+	}
+	if calls[0].PromptTokens != 10 || calls[0].CompletionTokens != 5 {
+		t.Errorf("unexpected tokens: %+v", calls[0])
+	}
+	if calls[0].WorkerID == nil || *calls[0].WorkerID != "w-123" {
+		t.Errorf("expected workerID 'w-123', got %v", calls[0].WorkerID)
 	}
 }

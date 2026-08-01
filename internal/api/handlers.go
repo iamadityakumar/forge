@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"encoding/json"
@@ -14,12 +14,21 @@ import (
 
 // Handler holds the dependencies needed by the API endpoints.
 type Handler struct {
-	store store.JobStore
+	store          store.JobStore
+	maxPendingJobs int
 }
 
-// NewHandler builds a Handler backed by the given JobStore.
-func NewHandler(s store.JobStore) *Handler {
-	return &Handler{store: s}
+// NewHandler builds a Handler backed by the given JobStore, with optional
+// admission control cap maxPendingJobs (0 = unlimited).
+func NewHandler(s store.JobStore, maxPendingJobs ...int) *Handler {
+	limit := 0
+	if len(maxPendingJobs) > 0 {
+		limit = maxPendingJobs[0]
+	}
+	return &Handler{
+		store:          s,
+		maxPendingJobs: limit,
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -45,6 +54,23 @@ func (h *Handler) createJobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Payload) == 0 {
 		req.Payload = json.RawMessage(`{}`)
+	}
+
+	if h.maxPendingJobs > 0 {
+		pending, err := h.store.CountPendingJobs(r.Context())
+		if err != nil {
+			slog.Error("count pending jobs failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to check queue capacity")
+			return
+		}
+		if pending >= h.maxPendingJobs {
+			w.Header().Set("Retry-After", "5")
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{
+				"error":   "queue at capacity",
+				"pending": pending,
+			})
+			return
+		}
 	}
 
 	job, err := h.store.CreateJob(r.Context(), req.TaskType, req.Payload, req.Priority, req.IdempotencyKey)
@@ -165,4 +191,36 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}// ---------------------------------------------------------------------------
+// GET /jobs/{id}/llm_calls
+// ---------------------------------------------------------------------------
+
+// jobLLMCallsHandler returns all recorded LLM calls for a job.
+func (h *Handler) jobLLMCallsHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid job ID format")
+		return
+	}
+
+	if _, err := h.store.GetJob(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	} else if err != nil {
+		slog.Error("get job for llm_calls failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get job")
+		return
+	}
+
+	calls, err := h.store.ListLLMCalls(r.Context(), id)
+	if err != nil {
+		slog.Error("list llm calls failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list llm calls")
+		return
+	}
+	if calls == nil {
+		calls = []store.LLMCall{}
+	}
+	writeJSON(w, http.StatusOK, calls)
 }
