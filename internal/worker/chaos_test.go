@@ -1,4 +1,4 @@
-package worker
+﻿package worker
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"forge/internal/store"
 )
 
-// chaos_test.go — the project's thesis expressed as a passing test instead of a
+// chaos_test.go â€” the project's thesis expressed as a passing test instead of a
 // story (U7). Instead of one kill -9 + eyeballing a trace, it runs a fleet of
 // workers against an in-process store that faithfully emulates fencing +
 // SKIP LOCKED claim + reclaim-running + lease expiry, while a seeded
@@ -24,20 +24,20 @@ import (
 // with a replacement spawned so the fleet stays alive. After the dust settles
 // it asserts three invariants:
 //
-//  1. Liveness  — every submitted job reaches a terminal state (completed or
+//  1. Liveness  â€” every submitted job reaches a terminal state (completed or
 //     dead_letter); none stuck forever.
-//  2. Safety     — the headline: no step is executed more than once. A per
-//     (job,step) counter incremented on every committed checkpoint stays ≤ 1,
+//  2. Safety     â€” the headline: no step is executed more than once. A per
+//     (job,step) counter incremented on every committed checkpoint stays â‰¤ 1,
 //     and the completed steps per job are exactly {1..K} with no gaps.
-//  3. No faults  — no panics and (under go test -race) no data races.
+//  3. No faults  â€” no panics and (under go test -race) no data races.
 //
 // Run repeatedly to catch timing-dependent exactly-once regressions:
 //
 //	go test -race -count=5 ./internal/worker/...
 //
-// The fake store is the only "oracle" here — if its fencing emulation were
+// The fake store is the only "oracle" here â€” if its fencing emulation were
 // wrong, the test would prove nothing. It mirrors postgres.go's invariants
-// (ClaimJob bumps lease_epoch and only reclaims pending ∪ expired
+// (ClaimJob bumps lease_epoch and only reclaims pending âˆª expired
 // claimed/running; RecordStep is fenced by epoch and idempotent; FailJob
 // requeues with backoff or dead-letters). The counter than makes exactly-once
 // *observable*: under correct fencing+resume a given (job,step) is committed at
@@ -94,6 +94,18 @@ func (s *chaosStore) CreateJob(_ context.Context, taskType string, payload json.
 	s.jobs[j.ID] = j
 	s.claimCursor = append(s.claimCursor, j.ID)
 	return j.Job, nil
+}
+
+func (s *chaosStore) CountPendingJobs(_ context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var count int
+	for _, j := range s.jobs {
+		if j.Status == store.StatusPending {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (s *chaosStore) GetJob(_ context.Context, id uuid.UUID) (store.Job, error) {
@@ -236,7 +248,7 @@ func (s *chaosStore) FailJob(_ context.Context, jobID uuid.UUID, epoch int, reas
 
 // RecordStep emulates the fenced, idempotent checkpoint CTE. It is the
 // exactly-once oracle: execCount[(job,step)] is bumped on EVERY successful
-// commit (including an ON-CONFLICT re-record), so a correct system keeps it ≤ 1.
+// commit (including an ON-CONFLICT re-record), so a correct system keeps it â‰¤ 1.
 func (s *chaosStore) RecordStep(ctx context.Context, jobID uuid.UUID, epoch int, step store.JobStep) (uuid.UUID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -371,7 +383,7 @@ func TestChaosRecoveryKillsExactlyOnce(t *testing.T) {
 
 	// Segment work is sized so a job clearly outlives one lease window (this
 	// exercises lease renewal *and* leaves jobs genuinely in-flight when the
-	// reaper kills — the 0.03s "free pass" you get with 1ms segments proves
+	// reaper kills â€” the 0.03s "free pass" you get with 1ms segments proves
 	// nothing). Still small enough for -race -count N to be fast.
 	prevMin, prevMax := segmentMinMs, segmentMaxMs
 	segmentMinMs, segmentMaxMs = 12, 30
@@ -385,7 +397,7 @@ func TestChaosRecoveryKillsExactlyOnce(t *testing.T) {
 			seed = v
 		}
 	}
-	rng := rand.New(rand.NewSource(seed)) // #nosec G404 — deterministic test RNG
+	rng := rand.New(rand.NewSource(seed)) // #nosec G404 â€” deterministic test RNG
 
 	const (
 		numJobs        = 24
@@ -515,7 +527,7 @@ func TestChaosRecoveryKillsExactlyOnce(t *testing.T) {
 	counts := fs.execCounts()
 	for key, c := range counts {
 		if c > 1 {
-			t.Errorf("SAFETY VIOLATION: step (job=%s, step=%d) committed %d times — not exactly-once (seed=0x%X)",
+			t.Errorf("SAFETY VIOLATION: step (job=%s, step=%d) committed %d times â€” not exactly-once (seed=0x%X)",
 				key.job, key.step, c, seed)
 		}
 	}
@@ -530,7 +542,7 @@ func TestChaosRecoveryKillsExactlyOnce(t *testing.T) {
 				t.Errorf("job %s step %d status %q, want completed", id, st.StepNumber, st.Status)
 			}
 			if seen[st.StepNumber] {
-				t.Errorf("job %s step %d appears twice in trace — not exactly-once", id, st.StepNumber)
+				t.Errorf("job %s step %d appears twice in trace â€” not exactly-once", id, st.StepNumber)
 			}
 			seen[st.StepNumber] = true
 		}
@@ -545,7 +557,7 @@ func TestChaosRecoveryKillsExactlyOnce(t *testing.T) {
 		st, dl := fs.jobStat(id)
 		if st == store.StatusCompleted && !dl {
 			if len(missing) > 0 {
-				t.Errorf("job %s completed with missing steps %v — recovery left gaps (seed=0x%X)", id, missing, seed)
+				t.Errorf("job %s completed with missing steps %v â€” recovery left gaps (seed=0x%X)", id, missing, seed)
 			}
 		}
 	}
@@ -553,10 +565,20 @@ func TestChaosRecoveryKillsExactlyOnce(t *testing.T) {
 	// (3) No-faults: reaching here means no panic; -race mode surfaces data
 	// races as failures automatically. Re-affirm with an error-free summary.
 	if !t.Failed() {
-		t.Logf("PASS: %d jobs × %d segments, %d-worker fleet (concurrency=%d), all terminal, all steps exactly-once (seed=0x%X)",
+		t.Logf("PASS: %d jobs Ã— %d segments, %d-worker fleet (concurrency=%d), all terminal, all steps exactly-once (seed=0x%X)",
 			numJobs, segmentsPerJob, numWorkers, concurrency, seed)
 	}
 }
 
 // Compile-time assertion that chaosStore satisfies store.JobStore.
 var _ store.JobStore = (*chaosStore)(nil)
+func (s *chaosStore) RecordLLMCall(_ context.Context, call store.LLMCall) (uuid.UUID, error) {
+	if call.ID == uuid.Nil {
+		call.ID = uuid.New()
+	}
+	return call.ID, nil
+}
+
+func (s *chaosStore) ListLLMCalls(_ context.Context, _ uuid.UUID) ([]store.LLMCall, error) {
+	return []store.LLMCall{}, nil
+}

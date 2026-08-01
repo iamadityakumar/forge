@@ -1,4 +1,4 @@
-package agent
+﻿package agent
 
 import (
 	"context"
@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
+
+	"github.com/google/uuid"
 
 	"forge/internal/llm"
 	"forge/internal/store"
@@ -50,6 +53,34 @@ func New(backend llm.LLMBackend, registry *tools.Registry) *Agent {
 		maxSteps:   maxSteps,
 		systemProm: buildSystemPrompt(registry),
 	}
+}
+
+func (a *Agent) completeAndRecord(ctx context.Context, s store.JobStore, jobID uuid.UUID, workerID string, req llm.CompleteRequest) (llm.CompleteResponse, error) {
+	est := llm.EstimateTokens(req)
+	t0 := time.Now()
+	resp, err := a.backend.Complete(ctx, req)
+	latency := int(time.Since(t0).Milliseconds())
+
+	call := store.LLMCall{
+		JobID:           jobID,
+		WorkerID:        &workerID,
+		Backend:         a.backend.Name(),
+		EstimatedTokens: est,
+		LatencyMs:       latency,
+	}
+
+	if err != nil {
+		errStr := err.Error()
+		call.Error = &errStr
+		_, _ = s.RecordLLMCall(ctx, call)
+		return resp, err
+	}
+
+	call.PromptTokens = resp.Usage.PromptTokens
+	call.CompletionTokens = resp.Usage.CompletionTokens
+	_, _ = s.RecordLLMCall(ctx, call)
+
+	return resp, nil
 }
 
 func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch int, workerID string) error {
@@ -101,7 +132,7 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 	for iteration < a.maxSteps {
 		iteration++
 
-		resp, err := a.backend.Complete(ctx, llm.CompleteRequest{
+		resp, err := a.completeAndRecord(ctx, s, job.ID, workerID, llm.CompleteRequest{
 			Messages: messages,
 			JSON:     true,
 		})
@@ -117,7 +148,7 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 				llm.Message{Role: "assistant", Content: resp.Content},
 				llm.Message{Role: "user", Content: `Your response was not valid JSON matching the required schema. Return ONLY a JSON object with "thought" and "action" fields, where "action" is "tool" or "finish".`},
 			)
-			nudgeResp, retryErr := a.backend.Complete(ctx, llm.CompleteRequest{
+			nudgeResp, retryErr := a.completeAndRecord(ctx, s, job.ID, workerID, llm.CompleteRequest{
 				Messages: nudge,
 				JSON:     true,
 			})
