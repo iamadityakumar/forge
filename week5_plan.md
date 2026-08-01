@@ -579,7 +579,7 @@ logs (low TPM), and — with `MAX_PENDING_JOBS` set — clean 429s under burst.
 | 5.11 | `scripts/burst_load_test.sh` — burst 30, no 5xx, all terminal | Load test | Core | ☐ |
 | 5.12 | LLM-call ledger migration + `GET /jobs/{id}/llm_calls` | Ledger | Stretch | ☐ |
 | 5.13 | Upstash Redis distributed bucket (`RATE_LIMIT_BACKEND=upstretch`) | Distributed | Stretch | ☐ |
-| 5.14 | Prometheus seed counters | Observability | Stretch | ☐ |
+| 5.14 | Prometheus seed counters | Observability | Stretch | ☑ |
 | 5.15 | Deploy to VM + live HTTPS burst demo | Deploy | Core | ☐ |
 
 ---
