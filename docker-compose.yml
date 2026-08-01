@@ -31,11 +31,12 @@ services:
       - "8080:8080"
     environment:
       DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
+      MAX_PENDING_JOBS: ${MAX_PENDING_JOBS:-0}
     depends_on:
       postgres:
         condition: service_healthy
 
-  # Worker pool — 4 workers competing for jobs against one Postgres queue.
+  # Worker pool: 4 workers competing for jobs against one Postgres queue.
   # Explicit services (rather than deploy.replicas) so each gets a distinct
   # WORKER_ID, which the claim query stamps on claimed_by and the trace/logs
   # use to prove a *different* worker resumed after a kill -9. Scale by adding
@@ -64,6 +65,11 @@ services:
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-10}
       RUN_TESTS_TIMEOUT_MS: ${RUN_TESTS_TIMEOUT_MS:-2000}
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-memory}
+      RATE_LIMIT_TPM: ${RATE_LIMIT_TPM:-0}
+      RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
+      UPSTASH_URL: ${UPSTASH_URL:-}
+      UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -90,6 +96,11 @@ services:
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-10}
       RUN_TESTS_TIMEOUT_MS: ${RUN_TESTS_TIMEOUT_MS:-2000}
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-memory}
+      RATE_LIMIT_TPM: ${RATE_LIMIT_TPM:-0}
+      RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
+      UPSTASH_URL: ${UPSTASH_URL:-}
+      UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -116,6 +127,11 @@ services:
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-10}
       RUN_TESTS_TIMEOUT_MS: ${RUN_TESTS_TIMEOUT_MS:-2000}
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-memory}
+      RATE_LIMIT_TPM: ${RATE_LIMIT_TPM:-0}
+      RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
+      UPSTASH_URL: ${UPSTASH_URL:-}
+      UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -142,6 +158,11 @@ services:
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-10}
       RUN_TESTS_TIMEOUT_MS: ${RUN_TESTS_TIMEOUT_MS:-2000}
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-memory}
+      RATE_LIMIT_TPM: ${RATE_LIMIT_TPM:-0}
+      RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
+      UPSTASH_URL: ${UPSTASH_URL:-}
+      UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy

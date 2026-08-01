@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"context"
@@ -18,14 +18,16 @@ import (
 // memStore is a minimal in-memory JobStore used for handler unit tests.
 // It avoids the need for a running Postgres in CI for basic HTTP tests.
 type memStore struct {
-	jobs   map[uuid.UUID]store.Job
-	steps  map[uuid.UUID][]store.JobStep
+	jobs     map[uuid.UUID]store.Job
+	steps    map[uuid.UUID][]store.JobStep
+	llmCalls map[uuid.UUID][]store.LLMCall
 }
 
 func newMemStore() *memStore {
 	return &memStore{
-		jobs:  make(map[uuid.UUID]store.Job),
-		steps: make(map[uuid.UUID][]store.JobStep),
+		jobs:     make(map[uuid.UUID]store.Job),
+		steps:    make(map[uuid.UUID][]store.JobStep),
+		llmCalls: make(map[uuid.UUID][]store.LLMCall),
 	}
 }
 
@@ -57,6 +59,16 @@ func (m *memStore) CreateJob(_ context.Context, taskType string, payload json.Ra
 	}
 	m.jobs[j.ID] = j
 	return j, nil
+}
+
+func (m *memStore) CountPendingJobs(_ context.Context) (int, error) {
+	var count int
+	for _, j := range m.jobs {
+		if j.Status == store.StatusPending {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (m *memStore) GetJob(_ context.Context, id uuid.UUID) (store.Job, error) {
@@ -94,6 +106,16 @@ func (m *memStore) RecordStep(_ context.Context, _ uuid.UUID, _ int, _ store.Job
 func (m *memStore) LastCompletedStep(_ context.Context, _ uuid.UUID) (int, error) { return 0, nil }
 func (m *memStore) ListSteps(_ context.Context, id uuid.UUID) ([]store.JobStep, error) {
 	return m.steps[id], nil
+}
+func (m *memStore) RecordLLMCall(_ context.Context, call store.LLMCall) (uuid.UUID, error) {
+	if call.ID == uuid.Nil {
+		call.ID = uuid.New()
+	}
+	m.llmCalls[call.JobID] = append(m.llmCalls[call.JobID], call)
+	return call.ID, nil
+}
+func (m *memStore) ListLLMCalls(_ context.Context, jobID uuid.UUID) ([]store.LLMCall, error) {
+	return m.llmCalls[jobID], nil
 }
 func (m *memStore) RenewLease(_ context.Context, _ uuid.UUID, _ int, _ time.Duration) error { return nil }
 func (m *memStore) Heartbeat(_ context.Context, _ string, _ string) error  { return nil }
@@ -276,5 +298,83 @@ func TestJobTraceNotFound(t *testing.T) {
 
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("want status %d for unknown job, got %d", http.StatusNotFound, rr.Code)
+	}
+}
+
+func TestJobLLMCalls(t *testing.T) {
+	ms := newMemStore()
+	h := NewHandler(ms)
+
+	created, _ := ms.CreateJob(context.Background(), "cp_solve", json.RawMessage(`{}`), 0, "")
+	ms.RecordLLMCall(context.Background(), store.LLMCall{
+		JobID:            created.ID,
+		Backend:          "groq",
+		PromptTokens:     150,
+		CompletionTokens: 50,
+		EstimatedTokens:  250,
+		LatencyMs:        320,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+created.ID.String()+"/llm_calls", nil)
+	rr := httptest.NewRecorder()
+	newTestRouter(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want status %d, got %d", http.StatusOK, rr.Code)
+	}
+	var calls []store.LLMCall
+	if err := json.NewDecoder(rr.Body).Decode(&calls); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("want 1 llm call, got %d", len(calls))
+	}
+	if calls[0].PromptTokens != 150 || calls[0].CompletionTokens != 50 {
+		t.Errorf("unexpected tokens in llm call: %+v", calls[0])
+	}
+}
+
+func TestCreateJob_AdmissionControl_429(t *testing.T) {
+	ms := newMemStore()
+	// Limit = 2
+	h := NewHandler(ms, 2)
+
+	r := chi.NewRouter()
+	RegisterRoutes(r, h)
+
+	// Create 2 jobs -> succeeds
+	for i := 0; i < 2; i++ {
+		body := `{"task_type":"cp_solve","payload":{"segment":1}}`
+		req := httptest.NewRequest(http.MethodPost, "/jobs", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("expected 201 Created, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// 3rd job -> rejected with 429
+	body := `{"task_type":"cp_solve","payload":{"segment":1}}`
+	req := httptest.NewRequest(http.MethodPost, "/jobs", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 Too Many Requests, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if retryAfter := rec.Header().Get("Retry-After"); retryAfter != "5" {
+		t.Errorf("expected Retry-After: 5, got %q", retryAfter)
+	}
+
+	var errResp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to unmarshal 429 response: %v", err)
+	}
+	if errResp["error"] != "queue at capacity" {
+		t.Errorf("expected error 'queue at capacity', got %v", errResp["error"])
+	}
+	if pending, ok := errResp["pending"].(float64); !ok || int(pending) != 2 {
+		t.Errorf("expected pending 2, got %v", errResp["pending"])
 	}
 }

@@ -1,4 +1,4 @@
-package store
+﻿package store
 
 import (
 	"context"
@@ -196,7 +196,7 @@ func (s *PgStore) scanJobs(ctx context.Context, query string, args ...any) ([]Jo
 }
 
 // ---------------------------------------------------------------------------
-// ClaimJob — the core engineering artifact (SKIP LOCKED + fencing token)
+// ClaimJob â€” the core engineering artifact (SKIP LOCKED + fencing token)
 // ---------------------------------------------------------------------------
 //
 // Mints a fencing token (lease_epoch = lease_epoch + 1) returned to the caller,
@@ -243,7 +243,7 @@ func (s *PgStore) ClaimJob(ctx context.Context, workerID string, leaseDuration t
 		&job.LeaseEpoch, &job.RunAt, &job.CompletedAt, &job.DeadLetter,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil // no claimable job — not an error
+		return nil, nil // no claimable job â€” not an error
 	}
 	if err != nil {
 		return nil, fmt.Errorf("claim job: %w", err)
@@ -252,10 +252,10 @@ func (s *PgStore) ClaimJob(ctx context.Context, workerID string, leaseDuration t
 }
 
 // ---------------------------------------------------------------------------
-// State transitions (fenced by lease_epoch — U1)
+// State transitions (fenced by lease_epoch â€” U1)
 // ---------------------------------------------------------------------------
 
-// StartJob transitions a job from claimed → running. The epoch must match the
+// StartJob transitions a job from claimed â†’ running. The epoch must match the
 // caller's fencing token; a mismatch (caller was deposed) yields ErrFenced.
 func (s *PgStore) StartJob(ctx context.Context, jobID uuid.UUID, epoch int) error {
 	res, err := s.db.ExecContext(ctx,
@@ -272,7 +272,7 @@ func (s *PgStore) StartJob(ctx context.Context, jobID uuid.UUID, epoch int) erro
 	return nil
 }
 
-// CompleteJob transitions a job from running → completed, fenced by epoch.
+// CompleteJob transitions a job from running â†’ completed, fenced by epoch.
 func (s *PgStore) CompleteJob(ctx context.Context, jobID uuid.UUID, epoch int) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE jobs SET status = 'completed', completed_at = now()
@@ -336,11 +336,11 @@ func computeBackoff(attempts int) time.Duration {
 // FailJob records a job's failure, fenced by epoch, and either requeues it for a
 // scheduled retry or dead-letters it:
 //
-//   - attempt_count < max_attempts → requeue: status='pending', claimed_by and
+//   - attempt_count < max_attempts â†’ requeue: status='pending', claimed_by and
 //     lease cleared, run_at = now()+backoff, lease_epoch bumped (invalidating
 //     the old token). The run_at gate in ClaimJob (run_at <= now()) enforces the
 //     backoff delay before the job is claimable again.
-//   - attempt_count >= max_attempts → dead-letter: status='failed',
+//   - attempt_count >= max_attempts â†’ dead-letter: status='failed',
 //     dead_letter=true, completed_at=now(), recorded reason. Surfaced by
 //     GET /jobs?status=dead_letter.
 //
@@ -348,7 +348,7 @@ func computeBackoff(attempts int) time.Duration {
 // gets ErrFenced and must not mutate the job. Reads attempt_count in a first
 // statement so the backoff can be computed in Go (keeping testability); the
 // fenced UPDATE then re-validates the epoch, so a race between read and write is
-// safe (the UPDATE affects zero rows → ErrFenced, and the computed backoff is
+// safe (the UPDATE affects zero rows â†’ ErrFenced, and the computed backoff is
 // simply discarded).
 func (s *PgStore) FailJob(ctx context.Context, jobID uuid.UUID, epoch int, reason string) error {
 	var attemptCount, maxAttempts int
@@ -409,7 +409,7 @@ func (s *PgStore) FailJob(ctx context.Context, jobID uuid.UUID, epoch int, reaso
 
 // RecordStep checkpoint-writes a single step, fenced by epoch. The C TE makes
 // the insert conditional on the caller still owning the job (lease_epoch
-// match); 0 rows ⇒ the caller was fenced ⇒ ErrFenced. ON CONFLICT makes a
+// match); 0 rows â‡’ the caller was fenced â‡’ ErrFenced. ON CONFLICT makes a
 // re-recording of the same step_number an in-place update (idempotent), so a
 // zombie that re-awakes cannot create a duplicate or corrupt rows.
 func (s *PgStore) RecordStep(ctx context.Context, jobID uuid.UUID, epoch int, step JobStep) (uuid.UUID, error) {
@@ -500,7 +500,7 @@ func (s *PgStore) ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, er
 // the holder renews every lease/3, so a healthy worker's lease never expires
 // (no false reclaim of a long job), and a deposed/zombie worker's renewal
 // returns ErrFenced (0 rows, epoch bumped by a reclaim) so it cancels the job
-// and stops pinning it. 0 rows ⇒ ErrFenced / ErrNotFound / ErrInvalidTransition.
+// and stops pinning it. 0 rows â‡’ ErrFenced / ErrNotFound / ErrInvalidTransition.
 func (s *PgStore) RenewLease(ctx context.Context, jobID uuid.UUID, epoch int, lease time.Duration) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE jobs SET lease_expires_at = now() + $2::interval
@@ -540,7 +540,7 @@ func (s *PgStore) Heartbeat(ctx context.Context, workerID string, hostname strin
 
 // classifyZeroRows distinguishes why a fenced write affected zero rows: the
 // job is gone (ErrNotFound), the worker's fencing token no longer matches
-// (ErrFenced — it was deposed by a reclaim), or the status simply wasn't the
+// (ErrFenced â€” it was deposed by a reclaim), or the status simply wasn't the
 // expected one (ErrInvalidTransition). Only runs on the failure path, so the
 // extra round-trip is acceptable.
 func (s *PgStore) classifyZeroRows(ctx context.Context, jobID uuid.UUID, epoch int) error {
@@ -559,4 +559,74 @@ func (s *PgStore) classifyZeroRows(ctx context.Context, jobID uuid.UUID, epoch i
 		return ErrFenced
 	}
 	return ErrInvalidTransition
+}
+
+// CountPendingJobs returns the count of jobs currently in status 'pending'.
+func (s *PgStore) CountPendingJobs(ctx context.Context) (int, error) {
+	var count int
+	query := `SELECT COUNT(*) FROM jobs WHERE status = 'pending'`
+	err := s.db.QueryRowContext(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count pending jobs: %w", err)
+	}
+	return count, nil
+}
+
+// RecordLLMCall inserts an LLM call record into the llm_calls table.
+func (s *PgStore) RecordLLMCall(ctx context.Context, call LLMCall) (uuid.UUID, error) {
+	if call.ID == uuid.Nil {
+		call.ID = uuid.New()
+	}
+	query := `
+		INSERT INTO llm_calls (
+			id, job_id, worker_id, backend, prompt_tokens, completion_tokens,
+			estimated_tokens, latency_ms, error, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+		RETURNING id
+	`
+	var id uuid.UUID
+	err := s.db.QueryRowContext(ctx, query,
+		call.ID, call.JobID, call.WorkerID, call.Backend,
+		call.PromptTokens, call.CompletionTokens, call.EstimatedTokens,
+		call.LatencyMs, call.Error,
+	).Scan(&id)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("record llm call: %w", err)
+	}
+	return id, nil
+}
+
+// ListLLMCalls retrieves all LLM calls for a job, ordered by created_at.
+func (s *PgStore) ListLLMCalls(ctx context.Context, jobID uuid.UUID) ([]LLMCall, error) {
+	query := `
+		SELECT id, job_id, worker_id, backend, prompt_tokens, completion_tokens,
+		       estimated_tokens, latency_ms, error, created_at
+		FROM llm_calls
+		WHERE job_id = $1
+		ORDER BY created_at ASC
+	`
+	rows, err := s.db.QueryContext(ctx, query, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("list llm calls: %w", err)
+	}
+	defer rows.Close()
+
+	var calls []LLMCall
+	for rows.Next() {
+		var c LLMCall
+		if err := rows.Scan(
+			&c.ID, &c.JobID, &c.WorkerID, &c.Backend, &c.PromptTokens,
+			&c.CompletionTokens, &c.EstimatedTokens, &c.LatencyMs, &c.Error, &c.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan llm call: %w", err)
+		}
+		calls = append(calls, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate llm calls: %w", err)
+	}
+	if calls == nil {
+		calls = []LLMCall{}
+	}
+	return calls, nil
 }

@@ -1,4 +1,4 @@
-package store
+﻿package store
 
 import (
 	"context"
@@ -44,6 +44,10 @@ type JobStore interface {
 	// ListJobs returns jobs filtered by status (empty string = all).
 	ListJobs(ctx context.Context, status string, limit int) ([]Job, error)
 
+	// CountPendingJobs returns the number of jobs currently in status 'pending'
+	// for admission control / backpressure at POST /jobs.
+	CountPendingJobs(ctx context.Context) (int, error)
+
 	// ClaimJob atomically claims the next available job for the given worker
 	// using SKIP LOCKED, mints a new fencing token (lease_epoch + 1) which the
 	// caller must use on subsequent fenced writes, and returns nil, nil when no
@@ -72,6 +76,12 @@ type JobStore interface {
 
 	// ListSteps returns the ordered steps of a job (for GET /jobs/{id}/trace).
 	ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, error)
+
+	// RecordLLMCall records an LLM call entry for a job ledger.
+	RecordLLMCall(ctx context.Context, call LLMCall) (uuid.UUID, error)
+
+	// ListLLMCalls returns the recorded LLM calls for a job (for GET /jobs/{id}/llm_calls).
+	ListLLMCalls(ctx context.Context, jobID uuid.UUID) ([]LLMCall, error)
 
 	// RenewLease extends a claimed/running job's lease while the worker is
 	// alive, fenced by epoch. A 0-row write means the worker was deposed

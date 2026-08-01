@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"github.com/go-chi/chi/v5"
@@ -12,4 +12,5 @@ func RegisterRoutes(r chi.Router, h *Handler) {
 	r.Get("/jobs", h.listJobsHandler)
 	r.Get("/jobs/{id}", h.getJobHandler)
 	r.Get("/jobs/{id}/trace", h.jobTraceHandler)
+	r.Get("/jobs/{id}/llm_calls", h.jobLLMCallsHandler)
 }
