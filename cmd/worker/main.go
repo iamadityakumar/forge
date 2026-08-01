@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 
 	"forge/internal/agent"
 	"forge/internal/llm"
+	"forge/internal/metrics"
 	"forge/internal/ratelimit"
 	"forge/internal/store"
 	"forge/internal/tools"
@@ -82,6 +84,11 @@ func main() {
 		log.Fatalf("failed to configure LLM backend: %v", err)
 	}
 	slog.Info("LLM backend selected", "backend", rawBackend.Name())
+
+	// Week 5: Prometheus seed metrics endpoint.
+	// Each worker serves its own /metrics on METRICS_PORT (default 9091). After a
+	// burst run the counters are non-zero, proving backpressure is observable.
+	metricsStore := metrics.New()
 
 	// Week 5: Rate Limiting configuration.
 	//
@@ -152,7 +159,7 @@ func main() {
 			}
 		}
 
-		backend = llm.NewRateLimitedBackend(rawBackend, lim)
+		backend = llm.NewRateLimitedBackend(rawBackend, lim, metricsStore)
 	}
 
 	reg := tools.NewRegistry()
@@ -166,6 +173,24 @@ func main() {
 	agentHandler := agent.New(backend, reg)
 	worker.RegisterHandler("cp_solve", agentHandler)
 	slog.Info("registered agent handler", "task_type", "cp_solve", "max_steps", agentHandler.MaxSteps())
+
+	// Week 5: Prometheus seed metrics endpoint on METRICS_PORT (default 9091).
+	metricsPort := 9091
+	if s := os.Getenv("METRICS_PORT"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			metricsPort = n
+		} else {
+			slog.Warn("invalid METRICS_PORT; using default", "value", s, "default", metricsPort)
+		}
+	}
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", metricsStore)
+	go func() {
+		slog.Info("metrics endpoint listening", "addr", fmt.Sprintf(":%d", metricsPort))
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", metricsPort), metricsMux); err != nil && err != http.ErrServerClosed {
+			slog.Warn("metrics server stopped", "error", err)
+		}
+	}()
 
 	// Set up graceful shutdown via SIGINT/SIGTERM.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
