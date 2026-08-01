@@ -902,6 +902,10 @@ command above.
 
 **Acceptance:** the script prints `PASS ...` (exit 0) over HTTPS; `docs/week4_demo.md` records the real transcript with the two-worker `worker_id` trace.
 
+> ✅ **Done (2026-07-31).** Ran against the live VM: job `78e30238-1846-454c-8f89-935127e2fb4b`,
+> killed `worker-1` after 2 steps, `worker-3` reclaimed and completed at 9 steps. Exit 0; full
+> transcript and evidence in [`docs/week4_demo.md`](docs/week4_demo.md).
+
 ---
 ## Out-of-scope, with seeds planted now
 
@@ -929,35 +933,35 @@ command above.
 
 | # | Task | Upgrade / area | Core/Stretch | Status |
 |---|------|----------------|--------------|--------|
-| 0.1 | `migrations/000004` `worker_id` + `models.go` + `RecordStep`/`ListSteps` SQL | attribution | core | ☐ |
-| 0.2 | `executeJob` → dispatcher; `segmentHandler`; `Handler`/`RegisterHandler`; 3 test call-site edits | dispatch seam | core | ☐ |
-| 1.1 | `internal/llm/llm.go`: `LLMBackend` interface, `Message`/`Usage`/`CompleteRequest/Response`, retry client, `NewFromEnv` | LLM abstraction (U9 seed) | core | ☐ |
-| 1.2 | `internal/llm/ollama.go` (POST `/api/chat`, `format:"json"`) | backend | core | ☐ |
-| 1.3 | `internal/llm/groq.go` (`Authorization`, `response_format`, `Retry-After`) | backend | core | ☐ |
-| 1.4 | `internal/llm/fake.go` (`FakeBackend`, `CallCount`) | U10 seed | core | ☐ |
-| 2.1 | `internal/tools/tools.go` `Tool`/`Registry` | tools | core | ☐ |
-| 2.2 | `internal/tools/search_kb.go` + `kb/*.md` (embedded, deterministic) | tools | core | ☐ |
-| 2.3 | `internal/tools/run_tests.go` + `run_tests_{unix,windows}.go` (pgid, timeout, cleanup) | sandbox | core | ☐ |
-| 2.4 | `finish` loop-level action (documented in agent) | tools | core | ☐ |
-| 3.1 | `internal/agent/agent.go` `Agent.Run` (two-row loop, mid-iteration resume) | agent loop | core | ☐ |
-| 3.2 | `internal/agent/history.go` `reconstructHistory` | agent loop | core | ☐ |
-| 3.3 | `internal/agent/decision.go` `Decision`/`parseDecision`/`buildSystemPrompt` | agent loop | core | ☐ |
-| 3.4 | Lease interaction (NO new code — rely on existing U2 extender) | lease | core | ☐ |
-| 3.5 | `AGENT_MAX_STEPS → FailJob` bound on the no-attempt-guard gap | robustness | core | ☐ |
-| 4.1 | `internal/llm/llm_test.go` (envelope, retry, ctx-cancel) | tests | core | ☐ |
-| 4.2 | `internal/tools/tools_test.go` (search/run/cleanup, Windows-skip) | tests | core | ☐ |
-| 4.3 | `internal/agent/agent_test.go` incl. `TestAgentLoop_ResumeMidIterationAfterDepose` | thesis test | core | ☐ |
-| 4.4 | `internal/agent/agent_test.go` real-Postgres smoke (`worker_id` regression) | tests | core | ☐ |
-| 5.1 | `cmd/worker/main.go` constructs agent + `RegisterHandler("cp_solve")` | wiring | core | ☐ |
-| 5.2 | env knobs table implemented + `.env.example` documented | config | core | ☐ |
-| 5.3 | `Dockerfile.worker` adds `python3` | images | core | ☐ |
-| 5.4 | `docker-compose.yml` passes new env to all 4 workers | compose | core | ☐ |
+| 0.1 | `migrations/000004` `worker_id` + `models.go` + `RecordStep`/`ListSteps` SQL | attribution | core | ☑ |
+| 0.2 | `executeJob` → dispatcher; `segmentHandler`; `Handler`/`RegisterHandler`; 3 test call-site edits | dispatch seam | core | ☑ |
+| 1.1 | `internal/llm/llm.go`: `LLMBackend` interface, `Message`/`Usage`/`CompleteRequest/Response`, retry client, `NewFromEnv` | LLM abstraction (U9 seed) | core | ☑ |
+| 1.2 | `internal/llm/ollama.go` (POST `/api/chat`, `format:"json"`) | backend | core | ☑ |
+| 1.3 | `internal/llm/groq.go` (`Authorization`, `response_format`, `Retry-After`) | backend | core | ☑ |
+| 1.4 | `internal/llm/fake.go` (`FakeBackend`, `CallCount`) | U10 seed | core | ☑ |
+| 2.1 | `internal/tools/tools.go` `Tool`/`Registry` | tools | core | ☑ |
+| 2.2 | `internal/tools/search_kb.go` + `kb/*.md` (embedded, deterministic) | tools | core | ☑ |
+| 2.3 | `internal/tools/run_tests.go` + `run_tests_{unix,windows}.go` (pgid, timeout, cleanup) | sandbox | core | ☑ |
+| 2.4 | `finish` loop-level action (documented in agent) | tools | core | ☑ |
+| 3.1 | `internal/agent/agent.go` `Agent.Run` (two-row loop, mid-iteration resume) | agent loop | core | ☑ |
+| 3.2 | `internal/agent/history.go` `reconstructHistory` | agent loop | core | ☑ |
+| 3.3 | `internal/agent/decision.go` `Decision`/`parseDecision`/`buildSystemPrompt` | agent loop | core | ☑ |
+| 3.4 | Lease interaction (NO new code — rely on existing U2 extender) | lease | core | ☑ |
+| 3.5 | `AGENT_MAX_STEPS → FailJob` bound on the no-attempt-guard gap | robustness | core | ☑ |
+| 4.1 | `internal/llm/llm_test.go` (envelope, retry, ctx-cancel) | tests | core | ☑ |
+| 4.2 | `internal/tools/tools_test.go` (search/run/cleanup, Windows-skip) | tests | core | ☑ |
+| 4.3 | `internal/agent/agent_test.go` incl. `TestAgentLoop_ResumeMidIterationAfterDepose` | thesis test | core | ☑ |
+| 4.4 | `internal/agent/agent_test.go` real-Postgres smoke (`worker_id` regression) | tests | core | ☑ |
+| 5.1 | `cmd/worker/main.go` constructs agent + `RegisterHandler("cp_solve")` | wiring | core | ☑ |
+| 5.2 | env knobs table implemented + `.env.example` documented | config | core | ☑ |
+| 5.3 | `Dockerfile.worker` adds `python3` | images | core | ☑ |
+| 5.4 | `docker-compose.yml` passes new env to all 4 workers | compose | core | ☑ |
 | 6.1 | `internal/agent/agent_chaos_test.go` (U7-style, U10 predecessor) | chaos test | stretch | ☐ |
 | 6.2 | Go/g++ `run_tests` languages + image toolchains | tools | stretch | ☐ |
 | 6.3 | Sandbox hardening (seccomp/bwrap, hard-kill reaper) + threat-model note update | security | stretch | ☐ |
 | 7.1 | `scripts/cp_solve_agent_demo.sh` (asserts PASS/FAIL) | demo | core | ☑ |
 | 7.2 | `docs/week4_demo.md` runbook + transcript | docs | core | ☑ |
-| 7.3 | Re-deploy to Oracle VM over HTTPS; demo `PASS` | deploy | core | ☐ |
+| 7.3 | Re-deploy to Oracle VM over HTTPS; demo `PASS` | deploy | core | ☑ |
 
 ---
 
@@ -974,13 +978,18 @@ command above.
 > surface per step. A poison-message agent that never `finish`es lands in `dead_letter` after
 > `AGENT_MAX_STEPS × max_attempts`, having burned no more than a bounded number of LLM calls.
 >
-> **✅ Demonstrated live over HTTPS (date, `DEMO_EXIT=0`):** _(to be filled by Task 7.3)_ — the
-> killed worker (`worker-N`) was SIGKILL'd after step `k`/total → a different worker
-> (`worker-M`) reclaimed (`lease_epoch m→m+1`), resumed from the checkpointed `plan` (its first
-> action a `tool_call`, proving the LLM decision was recovered not recomputed), and completed;
-> `trace` shows `plan`/`tool_call` rows by two distinct `worker_id` values, each step exactly-once.
-> Script printed `PASS: kill -9 -> different worker resumed agent from checkpoint, exactly-once,
-> two-worker trace`.
+> **✅ Demonstrated live over HTTPS (2026-07-31, `DEMO_EXIT=0`):** job
+> `78e30238-1846-454c-8f89-935127e2fb4b` (Groq backend). The killed worker (`worker-1`) was
+> SIGKILL'd after 2 committed steps — `kill mode: post_iteration` (a full plan+tool_call iteration
+> had landed, the next plan had not) → a different worker (`worker-3`) reclaimed (`lease_epoch`
+> bumped, `running → claimed`), called `reconstructHistory`, resumed the loop, and completed at
+> 9 steps. Because the kill landed *between* iterations, worker-3's first committed step was a
+> fresh `plan` — a valid cross-worker recovery, though not the zero-re-spend money shot (that
+> fires when the kill lands in the `[plan-committed, tool-committed)` window → `mid_iteration`).
+> `trace` = 9 rows (`plan`+`tool_call`), contiguous `step_number` 1..9, each committed exactly
+> once, `worker_id` spanning `worker-1` and `worker-3` (`worker_boundaries=[2]`); the final `plan`
+> is a durable `finish` decision. Script printed `PASS: kill -9 -> different worker resumed agent
+> from checkpoint, exactly-once, two-worker trace`.
 
 ---
 

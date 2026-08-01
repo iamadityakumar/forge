@@ -142,12 +142,48 @@ reclaimer step can legitimately be a new `plan`.
 
 ## Captured live evidence
 
-_To be filled after Task 7.3 is run on the Oracle VM._
+_Live run against the Oracle VM over HTTPS — 2026-07-31, Groq backend, `GRACE=0`._
 
 ```text
-DEMO_EXIT=<pending>
-job_id=<pending>
-killed_worker=<pending>
-reclaimer=<pending>
-trace_workers=<pending>
+DEMO_EXIT=0
+job_id=78e30238-1846-454c-8f89-935127e2fb4b
+killed_worker=worker-1
+reclaimer=worker-3
+trace_workers=worker-1,worker-3
+steps=9
+kill_mode=post_iteration
+worker_boundaries=[2]
 ```
+
+Real transcript (repetitive `status=running claimed_by=worker-1 committed=2` lease-wait polls elided):
+
+```text
+== submitting a cp_solve agent job via https://4orge.duckdns.org ==
+job_id=78e30238-1846-454c-8f89-935127e2fb4b
+owner (first claim): worker-1
+== waiting for the agent to commit its first plan (cap 60s) ==
+  first plan committed (2 committed step(s))
+== watching for the mid-iteration kill window (cap 60s) ==
+  full iteration committed (2 steps); no mid-iteration window within 0s — killing mid-job
+kill mode: post_iteration
+== killing owner worker-1 (container forge-worker-1) with kill -9 ==
+  killed; lease will expire and a different worker should reclaim
+== waiting for reclaim + resume + completion (cap 300s) ==
+  status=running claimed_by=worker-3 committed=2
+  status=running claimed_by=worker-3 committed=4
+  status=running claimed_by=worker-3 committed=8
+  status=completed claimed_by=worker-3 committed=9
+owner (final claim): worker-3
+PASS: a different worker (worker-3) completed the job, not the killed worker-1
+steps=9 types=plan,tool_call worker_ids=worker-1,worker-3 worker_boundaries=[2]
+PASS: all 9 plan/tool_call steps committed exactly once, contiguous; two-worker trace; finish decision durable
+== restarting the killed worker forge-worker-1 to restore the fleet ==
+== PASS: kill -9 -> different worker resumed agent from checkpoint, exactly-once, two-worker trace ==
+```
+
+The kill landed in `post_iteration` mode — after a full `plan`+`tool_call` iteration, before the
+next `plan` — so worker-3's first committed step is a fresh `plan`. The trace still proves
+cross-worker crash recovery and exactly-once checkpoint commits, but the `MONEY SHOT` line
+(reclaimer's first step a `tool_call`, LLM decision reused not recomputed) does not appear. That
+case fires when the kill lands in the `[plan-committed, tool-committed)` window (`mid_iteration`),
+which is the window `scripts/cp_solve_agent_demo.sh` hunts for by default.
