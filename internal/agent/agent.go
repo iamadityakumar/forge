@@ -1,4 +1,4 @@
-﻿package agent
+package agent
 
 import (
 	"context"
@@ -11,35 +11,26 @@ import (
 	"github.com/google/uuid"
 
 	"forge/internal/llm"
+	"forge/internal/metrics"
 	"forge/internal/store"
 	"forge/internal/tools"
+	"forge/internal/trace"
 )
 
-// Step types recorded in job_steps. Week 4 replaces the Week-3 "segment"
-// step type with a two-row per-iteration protocol:
-//   step 2k-1 → "plan"     (the LLM decision; committed BEFORE tool execution)
-//   step 2k   → "tool_call" (the observation / tool result)
 const (
 	StepTypePlan     = "plan"
 	StepTypeToolCall = "tool_call"
 )
 
-// Agent implements worker.Handler for the cp_solve task_type. It runs a
-// dynamic Plan -> Act -> Observe loop where every LLM decision (plan) and every
-// tool execution (tool_call) is a resumable, fenced step in PostgreSQL.
-//
-// Crash-recovery contract: a plan row is committed before its tool runs, so if
-// the worker is kill -9'd between the two, a reclaiming worker reconstructs the
-// history, detects the lone trailing plan, and re-executes the tool WITHOUT
-// re-calling the LLM API (zero re-spend on resume).
 type Agent struct {
 	backend    llm.LLMBackend
 	registry   *tools.Registry
 	maxSteps   int
 	systemProm string
+	metrics    *metrics.Metrics
 }
 
-func New(backend llm.LLMBackend, registry *tools.Registry) *Agent {
+func New(backend llm.LLMBackend, registry *tools.Registry, m *metrics.Metrics) *Agent {
 	maxSteps := 10
 	if envVal := os.Getenv("AGENT_MAX_STEPS"); envVal != "" {
 		if ms, err := strconv.Atoi(envVal); err == nil && ms > 0 {
@@ -52,6 +43,7 @@ func New(backend llm.LLMBackend, registry *tools.Registry) *Agent {
 		registry:   registry,
 		maxSteps:   maxSteps,
 		systemProm: buildSystemPrompt(registry),
+		metrics:    m,
 	}
 }
 
@@ -84,14 +76,17 @@ func (a *Agent) completeAndRecord(ctx context.Context, s store.JobStore, jobID u
 }
 
 func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch int, workerID string) error {
+	tracer := trace.NewTracer("agent")
+
 	steps, err := s.ListSteps(ctx, job.ID)
 	if err != nil {
 		return fmt.Errorf("agent list steps: %w", err)
 	}
 
-	// Rebuild the conversation from committed rows. If the last committed row is
-	// a lone plan (uncommitted tool execution from a crashed worker), pendingDecision
-	// is set and we re-execute the tool without re-calling the LLM.
+	if len(steps) > 0 && a.metrics != nil {
+		a.metrics.StepsResumed.Add(float64(len(steps)))
+	}
+
 	messages, pendingDecision, completedIterations, err := reconstructHistory(steps, a.systemProm, jobPrompt(job.Payload))
 	if err != nil {
 		return fmt.Errorf("agent reconstruct history: %w", err)
@@ -100,10 +95,6 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 	currentStepNum := len(steps)
 	iteration := completedIterations
 
-	// The committed history can already end in a finish decision if the previous
-	// worker crashed after recording its final plan but before the worker-loop
-	// CompleteJob. The finish is already durable — just return nil and let the
-	// worker loop transition the job to completed. No LLM call, no tool run.
 	if pendingDecision != nil && pendingDecision.Action == "finish" {
 		return nil
 	}
@@ -112,17 +103,33 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		toolOutput := executeToolCall(ctx, a.registry, pendingDecision)
+		stepCtx, toolSpan := tracer.StartSpan(ctx, "step.tool_call",
+			trace.Attribute{Key: "job_id", Value: job.ID.String()},
+			trace.Attribute{Key: "step_number", Value: currentStepNum + 1},
+			trace.Attribute{Key: "worker_id", Value: workerID},
+		)
+		toolStart := time.Now()
+		toolOutput := executeToolCall(stepCtx, a.registry, pendingDecision)
 		currentStepNum++
-		if _, err := s.RecordStep(ctx, job.ID, epoch, store.JobStep{
+		if _, err := s.RecordStep(stepCtx, job.ID, epoch, store.JobStep{
 			JobID:      job.ID,
 			StepNumber: currentStepNum,
 			StepType:   StepTypeToolCall,
 			Output:     toolOutputRaw(toolOutput),
 			WorkerID:   workerID,
 		}); err != nil {
+			toolSpan.SetStatus("error", err)
+			toolSpan.End()
 			return fmt.Errorf("record pending tool_call step %d: %w", currentStepNum, err)
 		}
+		toolDur := time.Since(toolStart)
+		toolSpan.End()
+
+		if a.metrics != nil {
+			a.metrics.StepsTotal.WithLabelValues(StepTypeToolCall).Inc()
+			a.metrics.StepDuration.WithLabelValues(StepTypeToolCall).Observe(toolDur.Seconds())
+		}
+
 		messages = append(messages, llm.Message{
 			Role:    "user",
 			Content: fmt.Sprintf("Tool Output (%s):\n%s", pendingDecision.ToolName, toolOutput),
@@ -132,53 +139,70 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 	for iteration < a.maxSteps {
 		iteration++
 
-		resp, err := a.completeAndRecord(ctx, s, job.ID, workerID, llm.CompleteRequest{
+		planCtx, planSpan := tracer.StartSpan(ctx, "step.plan",
+			trace.Attribute{Key: "job_id", Value: job.ID.String()},
+			trace.Attribute{Key: "step_number", Value: currentStepNum + 1},
+			trace.Attribute{Key: "worker_id", Value: workerID},
+		)
+
+		planStart := time.Now()
+		resp, err := a.completeAndRecord(planCtx, s, job.ID, workerID, llm.CompleteRequest{
 			Messages: messages,
 			JSON:     true,
 		})
 		if err != nil {
+			planSpan.SetStatus("error", err)
+			planSpan.End()
 			return fmt.Errorf("llm complete error at iteration %d: %w", iteration, err)
 		}
 
 		decision, parseErr := parseDecision(resp.Content)
 		if parseErr != nil {
-			// Single-nudge recovery: tell the model its output wasn't schema JSON
-			// and give it exactly one chance to re-emit.
 			nudge := append(messages,
 				llm.Message{Role: "assistant", Content: resp.Content},
 				llm.Message{Role: "user", Content: `Your response was not valid JSON matching the required schema. Return ONLY a JSON object with "thought" and "action" fields, where "action" is "tool" or "finish".`},
 			)
-			nudgeResp, retryErr := a.completeAndRecord(ctx, s, job.ID, workerID, llm.CompleteRequest{
+			nudgeResp, retryErr := a.completeAndRecord(planCtx, s, job.ID, workerID, llm.CompleteRequest{
 				Messages: nudge,
 				JSON:     true,
 			})
 			if retryErr != nil {
+				planSpan.SetStatus("error", retryErr)
+				planSpan.End()
 				return fmt.Errorf("llm nudge retry error: %w", retryErr)
 			}
 			decision, parseErr = parseDecision(nudgeResp.Content)
 			if parseErr != nil {
+				planSpan.SetStatus("error", parseErr)
+				planSpan.End()
 				return fmt.Errorf("invalid decision JSON after nudge retry: %w", parseErr)
 			}
 			resp.Content = nudgeResp.Content
 		}
 
 		currentStepNum++
-		if _, err := s.RecordStep(ctx, job.ID, epoch, store.JobStep{
+		if _, err := s.RecordStep(planCtx, job.ID, epoch, store.JobStep{
 			JobID:      job.ID,
 			StepNumber: currentStepNum,
 			StepType:   StepTypePlan,
 			Output:     json.RawMessage(resp.Content),
 			WorkerID:   workerID,
 		}); err != nil {
+			planSpan.SetStatus("error", err)
+			planSpan.End()
 			return fmt.Errorf("record plan step %d: %w", currentStepNum, err)
+		}
+		planDur := time.Since(planStart)
+		planSpan.End()
+
+		if a.metrics != nil {
+			a.metrics.StepsTotal.WithLabelValues(StepTypePlan).Inc()
+			a.metrics.StepDuration.WithLabelValues(StepTypePlan).Observe(planDur.Seconds())
 		}
 
 		messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content})
 
 		if decision.Action == "finish" {
-			// The finish decision is itself a committed plan row, so a crash
-			// between this and the worker-loop CompleteJob resumes cleanly. A nil
-			// return tells the worker loop to transition running -> completed.
 			return nil
 		}
 
@@ -186,16 +210,31 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 			return err
 		}
 
-		toolOutput := executeToolCall(ctx, a.registry, decision)
+		toolCtx, toolSpan := tracer.StartSpan(ctx, "step.tool_call",
+			trace.Attribute{Key: "job_id", Value: job.ID.String()},
+			trace.Attribute{Key: "step_number", Value: currentStepNum + 1},
+			trace.Attribute{Key: "worker_id", Value: workerID},
+		)
+		toolStart := time.Now()
+		toolOutput := executeToolCall(toolCtx, a.registry, decision)
 		currentStepNum++
-		if _, err := s.RecordStep(ctx, job.ID, epoch, store.JobStep{
+		if _, err := s.RecordStep(toolCtx, job.ID, epoch, store.JobStep{
 			JobID:      job.ID,
 			StepNumber: currentStepNum,
 			StepType:   StepTypeToolCall,
 			Output:     toolOutputRaw(toolOutput),
 			WorkerID:   workerID,
 		}); err != nil {
+			toolSpan.SetStatus("error", err)
+			toolSpan.End()
 			return fmt.Errorf("record tool_call step %d: %w", currentStepNum, err)
+		}
+		toolDur := time.Since(toolStart)
+		toolSpan.End()
+
+		if a.metrics != nil {
+			a.metrics.StepsTotal.WithLabelValues(StepTypeToolCall).Inc()
+			a.metrics.StepDuration.WithLabelValues(StepTypeToolCall).Observe(toolDur.Seconds())
 		}
 
 		messages = append(messages, llm.Message{
@@ -207,11 +246,8 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 	return fmt.Errorf("agent exceeded max steps limit of %d", a.maxSteps)
 }
 
-// MaxSteps reports the configured iteration cap (used for startup logging).
 func (a *Agent) MaxSteps() int { return a.maxSteps }
 
-// jobPrompt extracts the natural-language prompt from the cp_solve payload.
-// Accepts either {"prompt": "..."} or a bare-string payload.
 func jobPrompt(payload json.RawMessage) string {
 	var p struct {
 		Prompt string `json:"prompt"`

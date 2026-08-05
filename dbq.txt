@@ -1,0 +1,4 @@
+time="2026-08-06T01:51:04+05:30" level=warning msg="The \"DUCKDNS_TOKEN\" variable is not set. Defaulting to a blank string."
+ERROR:  column "worker_id" does not exist
+LINE 1: SELECT worker_id, last_heartbeat, now() FROM workers;
+               ^

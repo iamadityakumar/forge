@@ -1,0 +1,15 @@
+time="2026-08-06T01:48:20+05:30" level=warning msg="The \"DUCKDNS_TOKEN\" variable is not set. Defaulting to a blank string."
+forge-worker-1  | {"time":"2026-08-05T19:54:26.620027476Z","level":"INFO","msg":"trace provider initialized","service":"worker-worker-1","otlp_enabled":true}
+forge-worker-1  | {"time":"2026-08-05T19:54:26.643788546Z","level":"INFO","msg":"worker connected to database","service":"worker-worker-1","worker_id":"worker-1"}
+forge-worker-1  | {"time":"2026-08-05T19:54:26.653602821Z","level":"INFO","msg":"LLM backend selected","service":"worker-worker-1","backend":"fake"}
+forge-worker-1  | {"time":"2026-08-05T19:54:26.654029625Z","level":"INFO","msg":"registered agent handler","service":"worker-worker-1","task_type":"cp_solve","max_steps":10}
+forge-worker-1  | {"time":"2026-08-05T19:54:26.654516973Z","level":"INFO","msg":"metrics endpoint listening","service":"worker-worker-1","addr":":9091"}
+forge-worker-1  | {"time":"2026-08-05T19:54:26.656573246Z","level":"INFO","msg":"worker started","service":"worker-worker-1","worker_id":"worker-1","lease":120000000000,"concurrency":1}
+forge-worker-1  | {"time":"2026-08-05T19:58:00.1322285Z","level":"INFO","msg":"claimed job","service":"worker-worker-1","worker_id":"worker-1","job_id":"ca7f614d-8d65-4763-8bb5-243fdf174216","task_type":"segments","attempt":1,"epoch":1}
+forge-worker-1  | {"time":"2026-08-05T19:58:00.144743324Z","level":"INFO","msg":"executing job","service":"worker-worker-1","job_id":"ca7f614d-8d65-4763-8bb5-243fdf174216","task_type":"segments","segments":3,"resume_from":0,"remaining":3}
+forge-worker-1  | {"time":"2026-08-05T19:58:00.601911504Z","level":"INFO","msg":"segment checkpointed","service":"worker-worker-1","job_id":"ca7f614d-8d65-4763-8bb5-243fdf174216","step":1,"of":3}
+forge-worker-1  | {"time":"2026-08-05T19:58:01.78622281Z","level":"INFO","msg":"segment checkpointed","service":"worker-worker-1","job_id":"ca7f614d-8d65-4763-8bb5-243fdf174216","step":2,"of":3}
+forge-worker-1  | {"time":"2026-08-05T19:58:02.808011437Z","level":"INFO","msg":"segment checkpointed","service":"worker-worker-1","job_id":"ca7f614d-8d65-4763-8bb5-243fdf174216","step":3,"of":3}
+forge-worker-1  | {"time":"2026-08-05T19:58:02.809722621Z","level":"INFO","msg":"job completed","service":"worker-worker-1","worker_id":"worker-1","job_id":"ca7f614d-8d65-4763-8bb5-243fdf174216"}
+forge-worker-1  | {"time":"2026-08-05T19:58:02.809777746Z","level":"INFO","msg":"span","service":"worker-worker-1","trace_id":"4fb509cb9d41373fa7d7f0dcb2fa5aa9","span_id":"3b85f1878fc81d9b","parent_span_id":"","name":"job.run","duration_ms":2677,"job_id":"ca7f614d-8d65-4763-8bb5-243fdf174216","worker_id":"worker-1","task_type":"segments","attempt":1,"epoch":1,"status":"ok"}
+forge-worker-1  | {"time":"2026-08-05T19:58:06.645666837Z","level":"INFO","msg":"traces export: failed to send to http://jaeger:4318/: 404 Not Found (body: 404 page not found)","service":"worker-worker-1"}

@@ -1,4 +1,4 @@
-﻿package agent
+package agent
 
 import (
 	"context"
@@ -17,19 +17,17 @@ import (
 	"forge/internal/tools"
 )
 
-// memoryStore is an in-memory store.JobStore used to drive the agent loop tests
-// deterministically without PostgreSQL.
 type memoryStore struct {
-	mu    sync.Mutex
-	jobs  map[string]*store.Job
-	steps map[string][]store.JobStep
+	mu       sync.Mutex
+	jobs     map[string]*store.Job
+	steps    map[string][]store.JobStep
 	llmCalls map[string][]store.LLMCall
 }
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{
-		jobs:  make(map[string]*store.Job),
-		steps: make(map[string][]store.JobStep),
+		jobs:     make(map[string]*store.Job),
+		steps:    make(map[string][]store.JobStep),
 		llmCalls: make(map[string][]store.LLMCall),
 	}
 }
@@ -59,6 +57,12 @@ func (m *memoryStore) CountPendingJobs(ctx context.Context) (int, error) {
 		}
 	}
 	return count, nil
+}
+
+func (m *memoryStore) SetTraceContext(ctx context.Context, jobID uuid.UUID, epoch int, tc json.RawMessage) error { return nil }
+
+func (m *memoryStore) CountActiveWorkers(ctx context.Context, within time.Duration) (int, error) {
+	return 1, nil
 }
 
 func (m *memoryStore) GetJob(ctx context.Context, id uuid.UUID) (store.Job, error) {
@@ -173,8 +177,6 @@ func (m *memoryStore) Ping(ctx context.Context) error { return nil }
 
 func (m *memoryStore) Close() error { return nil }
 
-// countingTool is a deterministic tool that counts its executions, letting the
-// thesis test assert that a resumed worker re-runs the tool exactly once.
 type countingTool struct {
 	calls int
 }
@@ -187,15 +189,6 @@ func (c *countingTool) Execute(ctx context.Context, argsJSON string) (string, er
 	return fmt.Sprintf("KB search result #%d", c.calls), nil
 }
 
-// TestAgentLoop_ResumeMidIterationAfterDepose is the Week-4 thesis test:
-//
-//	worker-1 records plan step 1, then is DEPOSED (epoch bumped) before it can
-//	record the tool_call. worker-2 reclaims (epoch 2), rebuilds the history,
-//	detects the pending decision, re-executes the tool WITHOUT re-calling the
-//	LLM, then completes the job. Asserts:
-//	  - zero LLM re-spend on resume (CallCount stays 2 across both workers)
-//	  - tool executes exactly once (by worker-2)
-//	  - steps are attributed to 2 distinct worker_ids with complete continuity
 func TestAgentLoop_ResumeMidIterationAfterDepose(t *testing.T) {
 	ms := newMemoryStore()
 	jobVal, err := ms.CreateJob(context.Background(), "cp_solve", json.RawMessage(`{"prompt": "Solve 2-sum"}`), 0, "")
@@ -219,14 +212,12 @@ func TestAgentLoop_ResumeMidIterationAfterDepose(t *testing.T) {
 		llm.CompleteResponse{Content: plan2},
 	)
 
-	// Worker-1 runs against a store that depose-fences it right after the first
-	// plan row commits â€” the exact kill window the plan is designed around.
 	deposingStore := &deposeAfterPlanStore{
 		memoryStore: ms,
 		targetStep:  1,
 	}
 
-	worker1 := New(fakeLLM, reg)
+	worker1 := New(fakeLLM, reg, nil)
 	err = worker1.Run(context.Background(), deposingStore, job, 1, "worker-1")
 	if err == nil || !errors.Is(err, store.ErrFenced) {
 		t.Fatalf("expected fenced error on worker-1, got: %v", err)
@@ -244,10 +235,9 @@ func TestAgentLoop_ResumeMidIterationAfterDepose(t *testing.T) {
 		t.Fatalf("unexpected step 1: %+v", steps[0])
 	}
 
-	// Worker-2 reclaims: the job's epoch is now 2 (bumped by the depose).
 	job.LeaseEpoch = 2
 
-	worker2 := New(fakeLLM, reg)
+	worker2 := New(fakeLLM, reg, nil)
 	err = worker2.Run(context.Background(), ms, job, 2, "worker-2")
 	if err != nil {
 		t.Fatalf("worker-2 failed to complete the job: %v", err)
@@ -265,7 +255,6 @@ func TestAgentLoop_ResumeMidIterationAfterDepose(t *testing.T) {
 		t.Fatalf("expected 3 final steps (plan, tool_call, plan), got %d", len(finalSteps))
 	}
 
-	// Step continuity + dual worker_id attribution.
 	if finalSteps[0].StepType != StepTypePlan || finalSteps[0].WorkerID != "worker-1" {
 		t.Errorf("expected step 1 plan by worker-1, got %+v", finalSteps[0])
 	}
@@ -276,14 +265,11 @@ func TestAgentLoop_ResumeMidIterationAfterDepose(t *testing.T) {
 		t.Errorf("expected step 3 plan by worker-2, got %+v", finalSteps[2])
 	}
 
-	// The nil return means the worker loop would CompleteJob cleanly (not fenced).
 	if err := ms.CompleteJob(context.Background(), job.ID, 2); err != nil {
 		t.Errorf("job should be completable by worker-2, got: %v", err)
 	}
 }
 
-// deposeAfterPlanStore records the target step, then bumps the job's epoch and
-// returns ErrFenced â€” simulating a concurrent reclaim beating us to the write.
 type deposeAfterPlanStore struct {
 	*memoryStore
 	targetStep int
@@ -317,7 +303,7 @@ func TestAgentLoop_MaxStepsFailJob(t *testing.T) {
 	fakeLLM := llm.NewFakeBackend(llm.CompleteResponse{Content: loopPlan})
 
 	t.Setenv("AGENT_MAX_STEPS", "2")
-	ag := New(fakeLLM, reg)
+	ag := New(fakeLLM, reg, nil)
 
 	err := ag.Run(context.Background(), ms, job, 1, "worker-1")
 	if err == nil {
@@ -327,7 +313,6 @@ func TestAgentLoop_MaxStepsFailJob(t *testing.T) {
 		t.Errorf("expected max steps error, got: %v", err)
 	}
 
-	// Like the worker loop, an execution error becomes a FailJob.
 	if err := ms.FailJob(context.Background(), job.ID, 1, err.Error()); err != nil {
 		t.Fatalf("fail job: %v", err)
 	}
@@ -348,7 +333,7 @@ func TestAgentLoop_BadJSONRetriesOnceThenFails(t *testing.T) {
 		llm.CompleteResponse{Content: "still invalid json"},
 	)
 
-	ag := New(fakeLLM, nil)
+	ag := New(fakeLLM, nil, nil)
 	err := ag.Run(context.Background(), ms, job, 1, "worker-1")
 	if err == nil {
 		t.Fatal("expected error after bad JSON nudge retry, got nil")
@@ -408,8 +393,6 @@ func TestReconstructHistory_CompleteIteration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconstruct: %v", err)
 	}
-	// A committed finish plan is reported as a pending finish decision so the
-	// caller can return nil without re-calling the LLM.
 	if pending == nil || pending.Action != "finish" {
 		t.Fatalf("expected pending finish decision, got: %+v", pending)
 	}
@@ -450,7 +433,6 @@ func (m *memoryStore) ListLLMCalls(ctx context.Context, jobID uuid.UUID) ([]stor
 	return append([]store.LLMCall(nil), calls...), nil
 }
 
-
 func TestCompleteAndRecord(t *testing.T) {
 	ms := newMemoryStore()
 	job, _ := ms.CreateJob(context.Background(), "cp_solve", json.RawMessage("{}"), 0, "")
@@ -459,7 +441,7 @@ func TestCompleteAndRecord(t *testing.T) {
 		Content: "hello",
 		Usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 5},
 	})
-	ag := New(fakeLLM, tools.NewRegistry())
+	ag := New(fakeLLM, tools.NewRegistry(), nil)
 
 	req := llm.CompleteRequest{
 		Messages: []llm.Message{{Role: "user", Content: "test"}},
@@ -487,3 +469,4 @@ func TestCompleteAndRecord(t *testing.T) {
 		t.Errorf("expected workerID 'w-123', got %v", calls[0].WorkerID)
 	}
 }
+

@@ -32,6 +32,12 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
       MAX_PENDING_JOBS: ${MAX_PENDING_JOBS:-0}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      WORKER_METRICS_URLS: ${WORKER_METRICS_URLS:-worker-1=http://worker-1:9091/metrics,worker-2=http://worker-2:9091/metrics,worker-3=http://worker-3:9091/metrics,worker-4=http://worker-4:9091/metrics}
+      # When set (e.g. http://jaeger:4318 with the observability profile), spans
+      # are also exported via OTLP alongside the slog span lines.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,6 +79,9 @@ services:
       UPSTASH_URL: ${UPSTASH_URL:-}
       UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
       METRICS_PORT: ${METRICS_PORT:-9091}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,6 +93,8 @@ services:
     image: forge-worker:latest
     container_name: forge-worker-2
     restart: unless-stopped
+    ports:
+      - "9092:9091"
     environment:
       DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
       WORKER_ID: worker-2
@@ -105,6 +116,9 @@ services:
       UPSTASH_URL: ${UPSTASH_URL:-}
       UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
       METRICS_PORT: ${METRICS_PORT:-9091}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -116,6 +130,8 @@ services:
     image: forge-worker:latest
     container_name: forge-worker-3
     restart: unless-stopped
+    ports:
+      - "9093:9091"
     environment:
       DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
       WORKER_ID: worker-3
@@ -137,6 +153,9 @@ services:
       UPSTASH_URL: ${UPSTASH_URL:-}
       UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
       METRICS_PORT: ${METRICS_PORT:-9091}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -148,6 +167,8 @@ services:
     image: forge-worker:latest
     container_name: forge-worker-4
     restart: unless-stopped
+    ports:
+      - "9094:9091"
     environment:
       DATABASE_URL: postgres://postgres:secret@postgres:5432/forge?sslmode=disable
       WORKER_ID: worker-4
@@ -169,9 +190,33 @@ services:
       UPSTASH_URL: ${UPSTASH_URL:-}
       UPSTASH_TOKEN: ${UPSTASH_TOKEN:-}
       METRICS_PORT: ${METRICS_PORT:-9091}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: forge-prometheus
+    restart: unless-stopped
+    profiles: ["observability"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    container_name: forge-jaeger
+    restart: unless-stopped
+    profiles: ["observability"]
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
 
   # Caddy (HTTPS reverse proxy for DuckDNS)
   caddy:

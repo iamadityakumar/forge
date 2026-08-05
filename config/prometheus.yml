@@ -1,0 +1,13 @@
+﻿global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'forge'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets:
+          - 'orchestrator:8080'
+          - 'worker-1:9091'
+          - 'worker-2:9091'
+          - 'worker-3:9091'
+          - 'worker-4:9091'

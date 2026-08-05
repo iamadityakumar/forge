@@ -10,15 +10,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver registered as "pgx"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// PgStore implements JobStore backed by PostgreSQL.
 type PgStore struct {
 	db *sql.DB
 }
 
-// NewPgStore opens a connection pool and verifies connectivity.
 func NewPgStore(databaseURL string) (*PgStore, error) {
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
@@ -35,20 +33,11 @@ func NewPgStore(databaseURL string) (*PgStore, error) {
 	return &PgStore{db: db}, nil
 }
 
-// DB returns the underlying *sql.DB for health checks or direct access.
 func (s *PgStore) DB() *sql.DB { return s.db }
-
-// Close closes the connection pool.
 func (s *PgStore) Close() error { return s.db.Close() }
-
-// Ping checks database connectivity.
 func (s *PgStore) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }
-
-// ---------------------------------------------------------------------------
-// CreateJob
-// ---------------------------------------------------------------------------
 
 func (s *PgStore) CreateJob(ctx context.Context, taskType string, payload json.RawMessage, priority int, idempotencyKey string) (Job, error) {
 	if len(payload) == 0 {
@@ -60,50 +49,46 @@ func (s *PgStore) CreateJob(ctx context.Context, taskType string, payload json.R
 		idemKey = &idempotencyKey
 	}
 
-	// ON CONFLICT: if the idempotency key already exists, return the existing
-	// row unchanged. The DO UPDATE SET id = jobs.id trick forces RETURNING to
-	// fire even on conflict.
 	query := `
 		INSERT INTO jobs (task_type, payload, priority, idempotency_key)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (idempotency_key) DO UPDATE SET id = jobs.id
 		RETURNING id, task_type, payload, status, priority, idempotency_key,
 		          claimed_by, lease_expires_at, attempt_count, max_attempts,
-		          error_message, created_at, lease_epoch, run_at, completed_at, dead_letter
+		          error_message, created_at, lease_epoch, run_at, completed_at, dead_letter, trace_context
 	`
 
 	var job Job
+	var tc []byte
 	err := s.db.QueryRowContext(ctx, query, taskType, payload, priority, idemKey).Scan(
 		&job.ID, &job.TaskType, &job.Payload, &job.Status,
 		&job.Priority, &job.IdempotencyKey, &job.ClaimedBy,
 		&job.LeaseExpiresAt, &job.AttemptCount, &job.MaxAttempts,
 		&job.ErrorMessage, &job.CreatedAt,
-		&job.LeaseEpoch, &job.RunAt, &job.CompletedAt, &job.DeadLetter,
+		&job.LeaseEpoch, &job.RunAt, &job.CompletedAt, &job.DeadLetter, &tc,
 	)
 	if err != nil {
 		return Job{}, fmt.Errorf("create job: %w", err)
 	}
+	job.TraceContext = json.RawMessage(tc)
 	return job, nil
 }
-
-// ---------------------------------------------------------------------------
-// GetJob
-// ---------------------------------------------------------------------------
 
 func (s *PgStore) GetJob(ctx context.Context, id uuid.UUID) (Job, error) {
 	query := `
 		SELECT id, task_type, payload, status, priority, idempotency_key,
 		       claimed_by, lease_expires_at, attempt_count, max_attempts,
-		       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter
+		       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter, trace_context
 		FROM jobs WHERE id = $1
 	`
 	var job Job
+	var tc []byte
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&job.ID, &job.TaskType, &job.Payload, &job.Status,
 		&job.Priority, &job.IdempotencyKey, &job.ClaimedBy,
 		&job.LeaseExpiresAt, &job.AttemptCount, &job.MaxAttempts,
 		&job.ErrorMessage, &job.CreatedAt,
-		&job.LeaseEpoch, &job.RunAt, &job.CompletedAt, &job.DeadLetter,
+		&job.LeaseEpoch, &job.RunAt, &job.CompletedAt, &job.DeadLetter, &tc,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, ErrNotFound
@@ -111,18 +96,10 @@ func (s *PgStore) GetJob(ctx context.Context, id uuid.UUID) (Job, error) {
 	if err != nil {
 		return Job{}, fmt.Errorf("get job: %w", err)
 	}
+	job.TraceContext = json.RawMessage(tc)
 	return job, nil
 }
 
-// ---------------------------------------------------------------------------
-// ListJobs
-// ---------------------------------------------------------------------------
-
-// ListJobs returns jobs filtered by status. Empty status = all jobs.
-// status == StatusDeadLetter ("dead_letter") is a VIRTUAL filter: it returns
-// jobs that exhausted max_attempts (dead_letter=true), regardless of their
-// real status('failed'). This is how GET /jobs?status=dead_letter surfaces the
-// dead-letter queue (U5).
 func (s *PgStore) ListJobs(ctx context.Context, status string, limit int) ([]Job, error) {
 	if limit <= 0 {
 		limit = 50
@@ -131,12 +108,10 @@ func (s *PgStore) ListJobs(ctx context.Context, status string, limit int) ([]Job
 	var query string
 	switch status {
 	case StatusDeadLetter:
-		// Virtual dead-letter filter: poisoned jobs at any real status, though
-		// FailJob stores them at status='failed'.
 		query = `
 			SELECT id, task_type, payload, status, priority, idempotency_key,
 			       claimed_by, lease_expires_at, attempt_count, max_attempts,
-			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter
+			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter, trace_context
 			FROM jobs
 			WHERE dead_letter = true
 			ORDER BY created_at DESC
@@ -147,7 +122,7 @@ func (s *PgStore) ListJobs(ctx context.Context, status string, limit int) ([]Job
 		query = `
 			SELECT id, task_type, payload, status, priority, idempotency_key,
 			       claimed_by, lease_expires_at, attempt_count, max_attempts,
-			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter
+			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter, trace_context
 			FROM jobs
 			ORDER BY created_at DESC
 			LIMIT $1
@@ -157,7 +132,7 @@ func (s *PgStore) ListJobs(ctx context.Context, status string, limit int) ([]Job
 		query = `
 			SELECT id, task_type, payload, status, priority, idempotency_key,
 			       claimed_by, lease_expires_at, attempt_count, max_attempts,
-			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter
+			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter, trace_context
 			FROM jobs
 			WHERE status = $1
 			ORDER BY created_at DESC
@@ -167,7 +142,6 @@ func (s *PgStore) ListJobs(ctx context.Context, status string, limit int) ([]Job
 	}
 }
 
-// scanJobs runs a job SELECT with the given args and scans the result.
 func (s *PgStore) scanJobs(ctx context.Context, query string, args ...any) ([]Job, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -178,15 +152,17 @@ func (s *PgStore) scanJobs(ctx context.Context, query string, args ...any) ([]Jo
 	var jobs []Job
 	for rows.Next() {
 		var j Job
+		var tc []byte
 		if err := rows.Scan(
 			&j.ID, &j.TaskType, &j.Payload, &j.Status,
 			&j.Priority, &j.IdempotencyKey, &j.ClaimedBy,
 			&j.LeaseExpiresAt, &j.AttemptCount, &j.MaxAttempts,
 			&j.ErrorMessage, &j.CreatedAt,
-			&j.LeaseEpoch, &j.RunAt, &j.CompletedAt, &j.DeadLetter,
+			&j.LeaseEpoch, &j.RunAt, &j.CompletedAt, &j.DeadLetter, &tc,
 		); err != nil {
 			return nil, fmt.Errorf("scan job row: %w", err)
 		}
+		j.TraceContext = json.RawMessage(tc)
 		jobs = append(jobs, j)
 	}
 	if err := rows.Err(); err != nil {
@@ -194,18 +170,6 @@ func (s *PgStore) scanJobs(ctx context.Context, query string, args ...any) ([]Jo
 	}
 	return jobs, nil
 }
-
-// ---------------------------------------------------------------------------
-// ClaimJob â€” the core engineering artifact (SKIP LOCKED + fencing token)
-// ---------------------------------------------------------------------------
-//
-// Mints a fencing token (lease_epoch = lease_epoch + 1) returned to the caller,
-// who must present it on every subsequent fenced write. Reclaims both 'claimed'
-// and 'running' jobs whose lease has expired (U3: a worker that crashes after
-// StartJob leaves the row in 'running'; the textbook query that only reclaims
-// 'claimed' loses it forever). Gates scheduled/retried jobs by run_at (U5): a
-// job with run_at in the future is not claimable until it elapses. FOR UPDATE
-// SKIP LOCKED ensures two workers never claim the same row.
 
 func (s *PgStore) ClaimJob(ctx context.Context, workerID string, leaseDuration time.Duration) (*Job, error) {
 	query := `
@@ -227,36 +191,30 @@ func (s *PgStore) ClaimJob(ctx context.Context, workerID string, leaseDuration t
 		)
 		RETURNING id, task_type, payload, status, priority, idempotency_key,
 		          claimed_by, lease_expires_at, attempt_count, max_attempts,
-		          error_message, created_at, lease_epoch, run_at, completed_at, dead_letter
+		          error_message, created_at, lease_epoch, run_at, completed_at, dead_letter, trace_context
 	`
 
-	// Format lease duration as a Postgres interval in ms (precise for short
-	// leases used in tests/demos; "60000 milliseconds" == 1 minute).
 	interval := fmt.Sprintf("%d milliseconds", leaseDuration.Milliseconds())
 
 	var job Job
+	var tc []byte
 	err := s.db.QueryRowContext(ctx, query, workerID, interval).Scan(
 		&job.ID, &job.TaskType, &job.Payload, &job.Status,
 		&job.Priority, &job.IdempotencyKey, &job.ClaimedBy,
 		&job.LeaseExpiresAt, &job.AttemptCount, &job.MaxAttempts,
 		&job.ErrorMessage, &job.CreatedAt,
-		&job.LeaseEpoch, &job.RunAt, &job.CompletedAt, &job.DeadLetter,
+		&job.LeaseEpoch, &job.RunAt, &job.CompletedAt, &job.DeadLetter, &tc,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil // no claimable job â€” not an error
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("claim job: %w", err)
 	}
+	job.TraceContext = json.RawMessage(tc)
 	return &job, nil
 }
 
-// ---------------------------------------------------------------------------
-// State transitions (fenced by lease_epoch â€” U1)
-// ---------------------------------------------------------------------------
-
-// StartJob transitions a job from claimed â†’ running. The epoch must match the
-// caller's fencing token; a mismatch (caller was deposed) yields ErrFenced.
 func (s *PgStore) StartJob(ctx context.Context, jobID uuid.UUID, epoch int) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE jobs SET status = 'running'
@@ -272,7 +230,6 @@ func (s *PgStore) StartJob(ctx context.Context, jobID uuid.UUID, epoch int) erro
 	return nil
 }
 
-// CompleteJob transitions a job from running â†’ completed, fenced by epoch.
 func (s *PgStore) CompleteJob(ctx context.Context, jobID uuid.UUID, epoch int) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE jobs SET status = 'completed', completed_at = now()
@@ -288,27 +245,14 @@ func (s *PgStore) CompleteJob(ctx context.Context, jobID uuid.UUID, epoch int) e
 	return nil
 }
 
-// Retry backoff policy for requeued jobs. Package-level so tests can tighten
-// it for deterministic/tight timing (a future Phase-7 Clock/FakeLlm seam will
-// make this fully injection-based; for now overridable vars suffice).
-//
-//	backoff = min(cap, base * 2^(attempts-1)) + jitter
-//
-// 'attempts' is attempt_count at Fail time (the attempt that just failed,
-// already incremented by ClaimJob). A poisoned job therefore retries with
-// growing delay; once attempt_count >= max_attempts FailJob dead-letters
-// instead of requeuing.
 var (
 	backoffBase   = 2 * time.Second
 	backoffCap    = 5 * time.Minute
 	backoffJitter func() time.Duration = defaultBackoffJitter
 )
 
-// defaultBackoffJitter adds up to backoffBase of uniform jitter to a retry to
-// prevent thundering-herd retry storms. math/rand's top-level source is
-// concurrency-safe (locked) since Go 1.20, so this is fine under -race.
 func defaultBackoffJitter() time.Duration {
-	return time.Duration(rand.Int63n(int64(backoffBase) + 1)) // [0, base]
+	return time.Duration(rand.Int63n(int64(backoffBase) + 1))
 }
 
 func computeBackoff(attempts int) time.Duration {
@@ -316,7 +260,7 @@ func computeBackoff(attempts int) time.Duration {
 	if shift < 0 {
 		shift = 0
 	}
-	if shift > 20 { // guard against 1<<k overflow for absurd attempt counts
+	if shift > 20 {
 		shift = 20
 	}
 	d := backoffBase * (1 << shift)
@@ -333,23 +277,6 @@ func computeBackoff(attempts int) time.Duration {
 	return d
 }
 
-// FailJob records a job's failure, fenced by epoch, and either requeues it for a
-// scheduled retry or dead-letters it:
-//
-//   - attempt_count < max_attempts â†’ requeue: status='pending', claimed_by and
-//     lease cleared, run_at = now()+backoff, lease_epoch bumped (invalidating
-//     the old token). The run_at gate in ClaimJob (run_at <= now()) enforces the
-//     backoff delay before the job is claimable again.
-//   - attempt_count >= max_attempts â†’ dead-letter: status='failed',
-//     dead_letter=true, completed_at=now(), recorded reason. Surfaced by
-//     GET /jobs?status=dead_letter.
-//
-// A deposed worker (epoch mismatch, or reclaimed between the read and the write)
-// gets ErrFenced and must not mutate the job. Reads attempt_count in a first
-// statement so the backoff can be computed in Go (keeping testability); the
-// fenced UPDATE then re-validates the epoch, so a race between read and write is
-// safe (the UPDATE affects zero rows â†’ ErrFenced, and the computed backoff is
-// simply discarded).
 func (s *PgStore) FailJob(ctx context.Context, jobID uuid.UUID, epoch int, reason string) error {
 	var attemptCount, maxAttempts int
 	err := s.db.QueryRowContext(ctx,
@@ -365,7 +292,6 @@ func (s *PgStore) FailJob(ctx context.Context, jobID uuid.UUID, epoch int, reaso
 	}
 
 	if attemptCount >= maxAttempts {
-		// Terminal: dead-letter the poison message.
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE jobs
 			    SET status = 'failed', dead_letter = true, completed_at = now(),
@@ -383,8 +309,6 @@ func (s *PgStore) FailJob(ctx context.Context, jobID uuid.UUID, epoch int, reaso
 		return nil
 	}
 
-	// Requeue: schedule a retry after backoff. Bumping lease_epoch invalidates
-	// the just-failed worker's fencing token.
 	delay := computeBackoff(attemptCount)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE jobs
@@ -403,15 +327,6 @@ func (s *PgStore) FailJob(ctx context.Context, jobID uuid.UUID, epoch int, reaso
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// Checkpointed steps (U4)
-// ---------------------------------------------------------------------------
-
-// RecordStep checkpoint-writes a single step, fenced by epoch. The C TE makes
-// the insert conditional on the caller still owning the job (lease_epoch
-// match); 0 rows â‡’ the caller was fenced â‡’ ErrFenced. ON CONFLICT makes a
-// re-recording of the same step_number an in-place update (idempotent), so a
-// zombie that re-awakes cannot create a duplicate or corrupt rows.
 func (s *PgStore) RecordStep(ctx context.Context, jobID uuid.UUID, epoch int, step JobStep) (uuid.UUID, error) {
 	query := `
 		WITH owned AS (
@@ -437,8 +352,6 @@ func (s *PgStore) RecordStep(ctx context.Context, jobID uuid.UUID, epoch int, st
 	return id, nil
 }
 
-// LastCompletedStep returns the highest step_number recorded as 'completed' for
-// the job, or 0 if none. A reclaimed job resumes from this + 1.
 func (s *PgStore) LastCompletedStep(ctx context.Context, jobID uuid.UUID) (int, error) {
 	var step int
 	err := s.db.QueryRowContext(ctx,
@@ -452,8 +365,6 @@ func (s *PgStore) LastCompletedStep(ctx context.Context, jobID uuid.UUID) (int, 
 	return step, nil
 }
 
-// ListSteps returns all steps of a job ordered by step_number (for the trace
-// API and resumption diagnostics).
 func (s *PgStore) ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, job_id, step_number, step_type, input, output, status, duration_ms, created_at, worker_id
@@ -467,9 +378,6 @@ func (s *PgStore) ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, er
 	var steps []JobStep
 	for rows.Next() {
 		var st JobStep
-		// input/output are nullable JSONB; scan into []byte (database/sql maps
-		// NULL -> nil []byte) then convert, since *json.RawMessage is a named type
-		// database/sql won't treat as *[]byte.
 		var input, output []byte
 		var workerID sql.NullString
 		if err := rows.Scan(
@@ -491,16 +399,6 @@ func (s *PgStore) ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, er
 	return steps, nil
 }
 
-// ---------------------------------------------------------------------------
-// RenewLease (U2: lease extension as the self-fencing alive-signal)
-// ---------------------------------------------------------------------------
-
-// RenewLease pushes a claimed/running job's lease forward while its worker is
-// alive, fenced by epoch. This is the heartbeat that also encodes ownership:
-// the holder renews every lease/3, so a healthy worker's lease never expires
-// (no false reclaim of a long job), and a deposed/zombie worker's renewal
-// returns ErrFenced (0 rows, epoch bumped by a reclaim) so it cancels the job
-// and stops pinning it. 0 rows â‡’ ErrFenced / ErrNotFound / ErrInvalidTransition.
 func (s *PgStore) RenewLease(ctx context.Context, jobID uuid.UUID, epoch int, lease time.Duration) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE jobs SET lease_expires_at = now() + $2::interval
@@ -516,10 +414,6 @@ func (s *PgStore) RenewLease(ctx context.Context, jobID uuid.UUID, epoch int, le
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// Heartbeat
-// ---------------------------------------------------------------------------
-
 func (s *PgStore) Heartbeat(ctx context.Context, workerID string, hostname string) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO workers (id, hostname, last_heartbeat, status)
@@ -534,15 +428,34 @@ func (s *PgStore) Heartbeat(ctx context.Context, workerID string, hostname strin
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+func (s *PgStore) CountActiveWorkers(ctx context.Context, within time.Duration) (int, error) {
+	if within <= 0 {
+		within = 30 * time.Second
+	}
+	interval := fmt.Sprintf("%d milliseconds", within.Milliseconds())
+	query := `SELECT COUNT(*) FROM workers WHERE last_heartbeat > now() - $1::interval`
+	var count int
+	err := s.db.QueryRowContext(ctx, query, interval).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count active workers: %w", err)
+	}
+	return count, nil
+}
 
-// classifyZeroRows distinguishes why a fenced write affected zero rows: the
-// job is gone (ErrNotFound), the worker's fencing token no longer matches
-// (ErrFenced â€” it was deposed by a reclaim), or the status simply wasn't the
-// expected one (ErrInvalidTransition). Only runs on the failure path, so the
-// extra round-trip is acceptable.
+func (s *PgStore) SetTraceContext(ctx context.Context, jobID uuid.UUID, epoch int, tc json.RawMessage) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE jobs SET trace_context = $3 WHERE id = $1 AND lease_epoch = $2`,
+		jobID, epoch, tc,
+	)
+	if err != nil {
+		return fmt.Errorf("set trace context: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return s.classifyZeroRows(ctx, jobID, epoch)
+	}
+	return nil
+}
+
 func (s *PgStore) classifyZeroRows(ctx context.Context, jobID uuid.UUID, epoch int) error {
 	var status string
 	var leaseEpoch int
@@ -561,7 +474,6 @@ func (s *PgStore) classifyZeroRows(ctx context.Context, jobID uuid.UUID, epoch i
 	return ErrInvalidTransition
 }
 
-// CountPendingJobs returns the count of jobs currently in status 'pending'.
 func (s *PgStore) CountPendingJobs(ctx context.Context) (int, error) {
 	var count int
 	query := `SELECT COUNT(*) FROM jobs WHERE status = 'pending'`
@@ -572,7 +484,6 @@ func (s *PgStore) CountPendingJobs(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-// RecordLLMCall inserts an LLM call record into the llm_calls table.
 func (s *PgStore) RecordLLMCall(ctx context.Context, call LLMCall) (uuid.UUID, error) {
 	if call.ID == uuid.Nil {
 		call.ID = uuid.New()
@@ -596,7 +507,6 @@ func (s *PgStore) RecordLLMCall(ctx context.Context, call LLMCall) (uuid.UUID, e
 	return id, nil
 }
 
-// ListLLMCalls retrieves all LLM calls for a job, ordered by created_at.
 func (s *PgStore) ListLLMCalls(ctx context.Context, jobID uuid.UUID) ([]LLMCall, error) {
 	query := `
 		SELECT id, job_id, worker_id, backend, prompt_tokens, completion_tokens,

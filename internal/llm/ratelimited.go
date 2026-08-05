@@ -1,4 +1,4 @@
-﻿package llm
+package llm
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	"forge/internal/metrics"
 	"forge/internal/ratelimit"
+	"forge/internal/trace"
 )
 
 // RateLimitedBackend decorates an LLMBackend with rate limiting, reserving estimated prompt cost,
@@ -19,28 +20,66 @@ type RateLimitedBackend struct {
 }
 
 // NewRateLimitedBackend wraps an underlying LLMBackend with the given ratelimit.Limiter.
-// An optional *metrics.Metrics store seeds Prometheus counters; when omitted the
-// decorator stays a silent no-op (the metrics methods are nil-safe), so the core
-// phases keep zero observability dependencies.
-func NewRateLimitedBackend(backend LLMBackend, limiter ratelimit.Limiter, metricsOpt ...*metrics.Metrics) *RateLimitedBackend {
-	r := &RateLimitedBackend{
-		backend: backend,
-		limiter: limiter,
+// A *metrics.Metrics store is required for Prometheus metrics.
+func NewRateLimitedBackend(backend LLMBackend, limiter ratelimit.Limiter, m *metrics.Metrics) *RateLimitedBackend {
+	return &RateLimitedBackend{
+		backend:      backend,
+		limiter:      limiter,
+		metricsStore: m,
 	}
-	if len(metricsOpt) > 0 {
-		r.metricsStore = metricsOpt[0]
-	}
-	return r
 }
 
 func (r *RateLimitedBackend) Name() string {
 	return r.backend.Name()
 }
 
+// completeWithSpan wraps the provider call in a "llm.complete" span that is a
+// child of the caller's span (the agent's current step span). The span context
+// flows into the provider HTTP request via trace.InjectW3C in the backends, so
+// a traced provider would see the same trace. No-op (non-recording) when no
+// trace provider is set up.
+func (r *RateLimitedBackend) completeWithSpan(ctx context.Context, req CompleteRequest) (CompleteResponse, error) {
+	tracer := trace.NewTracer(r.backend.Name())
+	callCtx, span := tracer.StartSpan(ctx, "llm.complete",
+		trace.Attribute{Key: "backend", Value: r.backend.Name()},
+	)
+	defer span.End()
+
+	resp, err := r.backend.Complete(callCtx, req)
+	if err != nil {
+		span.SetStatus("error", err)
+	} else {
+		span.SetStatus("ok", nil)
+	}
+	return resp, err
+}
+
 // Complete estimates tokens, reserves capacity, calls the provider, and settles actual usage.
 func (r *RateLimitedBackend) Complete(ctx context.Context, req CompleteRequest) (CompleteResponse, error) {
+	m := r.metricsStore
+	backendName := r.backend.Name()
+
 	if r.limiter == nil {
-		return r.backend.Complete(ctx, req)
+		if m != nil {
+			m.LLMCalls.WithLabelValues(backendName).Inc()
+		}
+		t0 := time.Now()
+		resp, err := r.completeWithSpan(ctx, req)
+		dur := time.Since(t0)
+		if m != nil {
+			m.LLMDuration.WithLabelValues(backendName).Observe(dur.Seconds())
+		}
+		if err != nil {
+			if m != nil {
+				m.LLMErrors.WithLabelValues(backendName, ClassifyError(err)).Inc()
+			}
+			return CompleteResponse{}, err
+		}
+		if m != nil {
+			m.LLMTokens.WithLabelValues(backendName, "prompt").Add(float64(resp.Usage.PromptTokens))
+			m.LLMTokens.WithLabelValues(backendName, "completion").Add(float64(resp.Usage.CompletionTokens))
+		}
+		return resp, nil
 	}
 
 	est := EstimateTokens(req)
@@ -51,30 +90,30 @@ func (r *RateLimitedBackend) Complete(ctx context.Context, req CompleteRequest) 
 		return CompleteResponse{}, fmt.Errorf("rate limiter reserve: %w", err)
 	}
 
+	limiterName := "memory"
 	if !res.Granted {
 		slog.Warn("llm rate limit backpressure",
 			"estimated_tokens", est,
 			"wait_ms", res.WaitDuration.Milliseconds(),
 		)
-		// Wait until tokens become available or ctx is cancelled
 		t0 := time.Now()
 		select {
 		case <-ctx.Done():
 			return CompleteResponse{}, ctx.Err()
 		case <-time.After(res.WaitDuration):
 			waited := time.Since(t0)
-			r.metricsStore.Inc("forge_rate_limit_waits_total", nil)
-			r.metricsStore.Add("forge_rate_limit_wait_seconds", nil, waited.Seconds())
+			if m != nil {
+				m.RateLimitWaits.WithLabelValues(limiterName).Inc()
+				m.RateLimitWaitTime.WithLabelValues(limiterName).Observe(waited.Seconds())
+			}
 			slog.Info("rate limit wait complete", "waited_ms", waited.Milliseconds())
 		}
 
-		// Re-attempt reservation after wait
 		res, err = r.limiter.Reserve(ctx, est)
 		if err != nil {
 			return CompleteResponse{}, fmt.Errorf("rate limiter reserve post-wait: %w", err)
 		}
 		if !res.Granted {
-			// If still not granted, fall back to Wait helper
 			if err := r.limiter.Wait(ctx, est); err != nil {
 				return CompleteResponse{}, fmt.Errorf("rate limiter wait: %w", err)
 			}
@@ -82,25 +121,32 @@ func (r *RateLimitedBackend) Complete(ctx context.Context, req CompleteRequest) 
 	}
 
 	// Call underlying LLM backend
-	resp, err := r.backend.Complete(ctx, req)
+	if m != nil {
+		m.LLMCalls.WithLabelValues(backendName).Inc()
+	}
+	callStart := time.Now()
+	resp, err := r.completeWithSpan(ctx, req)
+	callDur := time.Since(callStart)
+	if m != nil {
+		m.LLMDuration.WithLabelValues(backendName).Observe(callDur.Seconds())
+	}
+
 	if err != nil {
-		// Refund estimated tokens on provider error
+		if m != nil {
+			m.LLMErrors.WithLabelValues(backendName, ClassifyError(err)).Inc()
+		}
 		if res.Settle != nil {
 			res.Settle(0)
 		}
 		return CompleteResponse{}, err
 	}
 
-	// Metrics: record the completed LLM call and its actual token usage.
-	r.metricsStore.Inc("forge_llm_calls_total", []metrics.Label{{Name: "backend", Value: r.backend.Name()}})
-	r.metricsStore.Add("forge_llm_tokens_total",
-		[]metrics.Label{{Name: "backend", Value: r.backend.Name()}, {Name: "kind", Value: "prompt"}},
-		float64(resp.Usage.PromptTokens))
-	r.metricsStore.Add("forge_llm_tokens_total",
-		[]metrics.Label{{Name: "backend", Value: r.backend.Name()}, {Name: "kind", Value: "completion"}},
-		float64(resp.Usage.CompletionTokens))
+	// Metrics: record actual token usage.
+	if m != nil {
+		m.LLMTokens.WithLabelValues(backendName, "prompt").Add(float64(resp.Usage.PromptTokens))
+		m.LLMTokens.WithLabelValues(backendName, "completion").Add(float64(resp.Usage.CompletionTokens))
+	}
 
-	// Settle actual tokens consumed
 	if res.Settle != nil {
 		actual := resp.Usage.PromptTokens + resp.Usage.CompletionTokens
 		res.Settle(actual)

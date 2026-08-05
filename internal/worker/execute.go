@@ -111,7 +111,7 @@ func (segmentHandler) Run(ctx context.Context, s store.JobStore, job *store.Job,
 // runSegment simulates one unit of work. In Week 4 this becomes a real
 // plan/tool-call/observation step. Returns the segment's JSON output and its
 // measured duration in ms.
-func runSegment(ctx context.Context, job *store.Job, n int) (json.RawMessage, int, error) {
+func runSegment(ctx context.Context, _ *store.Job, n int) (json.RawMessage, int, error) {
 	// Bounded random simulated work; guarded so setting segmentMin==segmentMax
 	// (e.g. the chaos test pinning tiny work) doesn't trip rand.Intn(0).
 	span := segmentMaxMs - segmentMinMs

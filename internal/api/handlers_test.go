@@ -61,6 +61,10 @@ func (m *memStore) CreateJob(_ context.Context, taskType string, payload json.Ra
 	return j, nil
 }
 
+func (m *memStore) CountActiveWorkers(_ context.Context, _ time.Duration) (int, error) { return 1, nil }
+
+func (m *memStore) SetTraceContext(_ context.Context, _ uuid.UUID, _ int, _ json.RawMessage) error { return nil }
+
 func (m *memStore) CountPendingJobs(_ context.Context) (int, error) {
 	var count int
 	for _, j := range m.jobs {
@@ -378,3 +382,5 @@ func TestCreateJob_AdmissionControl_429(t *testing.T) {
 		t.Errorf("expected pending 2, got %v", errResp["pending"])
 	}
 }
+
+

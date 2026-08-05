@@ -1,4 +1,4 @@
-# Week 6 Plan — Observability: structured logging, Prometheus metrics, and a live dashboard
+﻿# Week 6 Plan — Observability: structured logging, Prometheus metrics, and a live dashboard
 
 > Thesis: Weeks 1–5 made Forge **correct** (atomic claiming, fencing, crash
 > recovery) and **safe** (cost-aware rate limiting). Week 6 makes it
@@ -862,23 +862,23 @@ docker compose kill worker-2
 
 | # | Task | Area | Core/Stretch | Status |
 |---|---|---|---|---|
-| 6.0 | `internal/log/config.go` — `Setup(service)`, `LOG_FORMAT`/`LOG_LEVEL` | Logging | Core | ☐ |
-| 6.1 | Wire `Setup` into both `cmd/*/main.go` | Logging | Core | ☐ |
-| 6.2 | Add `prometheus/client_golang`; rework `internal/metrics` on custom `Registry`; migrate 4 Week-5 seed counters | Metrics | Core | ☐ |
-| 6.3 | `LatencyBuckets`/`StepBuckets` constants + cardinality rules documented | Metrics | Core | ☐ |
-| 6.4 | `MetricsMiddleware` (method/route/status) + `statusWriter` | API | Core | ☐ |
-| 6.5 | Handlers: `JobsSubmitted`/`JobsRejected`; `PendingJobs` gauge | API | Core | ☐ |
-| 6.6 | Worker lifecycle: claims/completed/failed/lease/in-flight/job-duration | Worker | Core | ☐ |
-| 6.7 | Agent step loop: `StepsTotal`/`StepDuration` histogram/`StepsResumed` | Agent | Core | ☐ |
-| 6.8 | `RateLimitedBackend`: LLM calls/duration/tokens/errors + rate-limit waits (required metrics param) | LLM | Core | ☐ |
-| 6.9 | `classify(err)` bounded error categories in `internal/llm` | LLM | Core | ☐ |
-| 6.10 | `GET /metrics` (API + workers), `GET /api/worker-metrics/{worker}` proxy, `WORKER_METRICS_URLS` | API | Core | ☐ |
-| 6.11 | Enriched `/health` + `CountActiveWorkers` on `JobStore` | API | Core | ☐ |
-| 6.12 | Dashboard rewrite: tiles, Chart.js charts, job table, step timeline, worker panel (vendored chart.umd.js) | Dashboard | Core | ☐ |
-| 6.13 | Observability tests (log/metrics/middleware/health/proxy/LLM/agent) — `chaos_test.go` byte-identical | Tests | Core | ☐ |
-| 6.14 | U8 OTel: `internal/trace`, slog span exporter, migration `000005_trace_context`, fenced `SetTraceContext`, spans claim/step/llm.complete, W3C `traceparent` inject | Tracing | Stretch | ☐ |
-| 6.15 | docker-compose `observability` profile + `config/prometheus.yml` | Observability stack | Stretch | ☐ |
-| 6.16 | Deploy to VM + live HTTPS dashboard demo, evidence in `docs/week6_demo.md` | Deploy | Core | ☐ |
+| 6.0 | `internal/log/config.go` — `Setup(service)`, `LOG_FORMAT`/`LOG_LEVEL` | Logging | Core | ☑ |
+| 6.1 | Wire `Setup` into both `cmd/*/main.go` | Logging | Core | ☑ |
+| 6.2 | Add `prometheus/client_golang`; rework `internal/metrics` on custom `Registry`; migrate 4 Week-5 seed counters | Metrics | Core | ☑ |
+| 6.3 | `LatencyBuckets`/`StepBuckets` constants + cardinality rules documented | Metrics | Core | ☑ |
+| 6.4 | `MetricsMiddleware` (method/route/status) + `statusWriter` | API | Core | ☑ |
+| 6.5 | Handlers: `JobsSubmitted`/`JobsRejected`; `PendingJobs` gauge | API | Core | ☑ |
+| 6.6 | Worker lifecycle: claims/completed/failed/lease/in-flight/job-duration | Worker | Core | ☑ |
+| 6.7 | Agent step loop: `StepsTotal`/`StepDuration` histogram/`StepsResumed` | Agent | Core | ☑ |
+| 6.8 | `RateLimitedBackend`: LLM calls/duration/tokens/errors + rate-limit waits (required metrics param) | LLM | Core | ☑ |
+| 6.9 | `classify(err)` bounded error categories in `internal/llm` | LLM | Core | ☑ |
+| 6.10 | `GET /metrics` (API + workers), `GET /api/worker-metrics/{worker}` proxy, `WORKER_METRICS_URLS` | API | Core | ☑ |
+| 6.11 | Enriched `/health` + `CountActiveWorkers` on `JobStore` | API | Core | ☑ |
+| 6.12 | Dashboard rewrite: tiles, Chart.js charts, job table, step timeline, worker panel (vendored chart.umd.js) | Dashboard | Core | ☑ |
+| 6.13 | Observability tests (log/metrics/middleware/health/proxy/LLM/agent) — `chaos_test.go` byte-identical | Tests | Core | ☑ |
+| 6.14 | U8 OTel: `internal/trace`, slog span exporter, migration `000005_trace_context`, fenced `SetTraceContext`, spans claim/step/llm.complete, W3C `traceparent` inject | Tracing | Stretch | ☑ |
+| 6.15 | docker-compose `observability` profile + `config/prometheus.yml` | Observability stack | Stretch | ☑ |
+| 6.16 | Deploy to VM + live HTTPS dashboard demo, evidence in `docs/week6_demo.md` | Deploy | Core | ☑ |
 
 ---
 

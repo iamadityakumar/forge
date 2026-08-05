@@ -1,152 +1,235 @@
-// Package metrics provides a minimal, dependency-free Prometheus counter store
-// used to seed observability (Week 5 stretch). It renders a small subset of the
-// Prometheus text exposition format so that GET /metrics on a worker surfaces
-// non-zero counters after a burst run.
 package metrics
 
 import (
-	"fmt"
-	"io"
 	"net/http"
-	"sort"
-	"strings"
-	"sync"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Label is a single Prometheus label pair rendered as name="value".
-type Label struct {
-	Name  string
-	Value string
-}
-
-// Metrics is a thread-safe store of named counters with sorted labels. Every
-// method is nil-safe: a nil *Metrics is a silent no-op, so the store can be
-// optional without scattering nil checks through callers.
+// Metrics is a per-process set of Prometheus metrics on its own registry.
+// Construct with New(namespace) — do NOT use the global default registry,
+// so tests are isolated and parallel-safe.
 type Metrics struct {
-	mu   sync.Mutex
-	rows map[string]*row
+	Registry *prometheus.Registry
+
+	// --- API / orchestrator layer ---
+	HTTPRequests        *prometheus.CounterVec   // {method, route, status}
+	HTTPRequestDuration *prometheus.HistogramVec // {method, route}
+	JobsSubmitted       *prometheus.CounterVec   // {task_type}
+	JobsRejected        *prometheus.CounterVec   // {reason}
+	PendingJobs         prometheus.Gauge
+	ActiveWorkers       prometheus.Gauge
+
+	// --- worker / agent layer ---
+	ClaimsTotal      prometheus.Counter
+	JobsCompleted    prometheus.Counter
+	JobsFailed       *prometheus.CounterVec   // {dead_letter}
+	JobDuration      prometheus.Histogram
+	LeaseExtensions  prometheus.Counter
+	InFlightJobs     prometheus.Gauge
+	StepsTotal       *prometheus.CounterVec   // {step_type}
+	StepDuration     *prometheus.HistogramVec // {step_type}
+	StepsResumed     prometheus.Counter
+
+	// --- LLM / rate-limit layer ---
+	LLMCalls          *prometheus.CounterVec   // {backend}
+	LLMDuration       *prometheus.HistogramVec // {backend}
+	LLMTokens         *prometheus.CounterVec   // {backend, kind=prompt|completion}
+	LLMErrors         *prometheus.CounterVec   // {backend, kind}  kind = bounded error category
+	RateLimitWaits    *prometheus.CounterVec   // {limiter}
+	RateLimitWaitTime *prometheus.HistogramVec // {limiter}
 }
 
-type row struct {
-	name   string
-	labels []Label
-	value  float64
+func New(namespace string) *Metrics {
+	reg := prometheus.NewRegistry()
+
+	m := &Metrics{
+		Registry: reg,
+	}
+
+	// Namespace prefix for all metric names (e.g., "forge" -> "forge_http_requests_total")
+	ns := namespace
+	if ns == "" {
+		ns = "forge"
+	}
+
+	// --- API / orchestrator layer ---
+	m.HTTPRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "http_requests_total",
+		Help:      "Total number of HTTP requests by method, route, and status.",
+	}, []string{"method", "route", "status"})
+
+	m.HTTPRequestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: ns,
+		Name:      "http_request_duration_seconds",
+		Help:      "HTTP request latency in seconds by method and route.",
+		Buckets:   LatencyBuckets,
+	}, []string{"method", "route"})
+
+	m.JobsSubmitted = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "jobs_submitted_total",
+		Help:      "Total number of jobs submitted by task type.",
+	}, []string{"task_type"})
+
+	m.JobsRejected = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "jobs_rejected_total",
+		Help:      "Total number of jobs rejected by reason (invalid, capacity).",
+	}, []string{"reason"})
+
+	m.PendingJobs = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: ns,
+		Name:      "pending_jobs",
+		Help:      "Current number of pending jobs in the queue.",
+	})
+
+	m.ActiveWorkers = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: ns,
+		Name:      "active_workers",
+		Help:      "Current number of active workers (heartbeat within window).",
+	})
+
+	// --- worker / agent layer ---
+	m.ClaimsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "claims_total",
+		Help:      "Total number of job claims by workers.",
+	})
+
+	m.JobsCompleted = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "jobs_completed_total",
+		Help:      "Total number of jobs completed successfully.",
+	})
+
+	m.JobsFailed = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "jobs_failed_total",
+		Help:      "Total number of jobs failed by dead-letter status.",
+	}, []string{"dead_letter"})
+
+	m.JobDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: ns,
+		Name:      "job_duration_seconds",
+		Help:      "Job execution duration in seconds.",
+		Buckets:   LatencyBuckets,
+	})
+
+	m.LeaseExtensions = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "lease_extensions_total",
+		Help:      "Total number of successful lease extensions.",
+	})
+
+	m.InFlightJobs = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: ns,
+		Name:      "in_flight_jobs",
+		Help:      "Current number of jobs being executed by this worker.",
+	})
+
+	m.StepsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "steps_total",
+		Help:      "Total number of agent steps executed by step type.",
+	}, []string{"step_type"})
+
+	m.StepDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: ns,
+		Name:      "step_duration_seconds",
+		Help:      "Agent step latency in seconds by step type.",
+		Buckets:   StepBuckets,
+	}, []string{"step_type"})
+
+	m.StepsResumed = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "steps_resumed_total",
+		Help:      "Total number of steps resumed from checkpoint on worker handoff.",
+	})
+
+	// --- LLM / rate-limit layer ---
+	m.LLMCalls = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "llm_calls_total",
+		Help:      "Total number of LLM API calls by backend.",
+	}, []string{"backend"})
+
+	m.LLMDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: ns,
+		Name:      "llm_duration_seconds",
+		Help:      "LLM API call latency in seconds by backend.",
+		Buckets:   LatencyBuckets,
+	}, []string{"backend"})
+
+	m.LLMTokens = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "llm_tokens_total",
+		Help:      "Total LLM tokens consumed by backend and kind (prompt, completion).",
+	}, []string{"backend", "kind"})
+
+	m.LLMErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "llm_errors_total",
+		Help:      "Total LLM errors by backend and error kind.",
+	}, []string{"backend", "kind"})
+
+	m.RateLimitWaits = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Name:      "rate_limit_waits_total",
+		Help:      "Total number of times LLM call waited for rate limit by limiter.",
+	}, []string{"limiter"})
+
+	m.RateLimitWaitTime = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: ns,
+		Name:      "rate_limit_wait_seconds",
+		Help:      "Time spent waiting for rate limit by limiter.",
+		Buckets:   LatencyBuckets,
+	}, []string{"limiter"})
+
+	// Register all metrics with the custom registry
+	reg.MustRegister(
+		m.HTTPRequests,
+		m.HTTPRequestDuration,
+		m.JobsSubmitted,
+		m.JobsRejected,
+		m.PendingJobs,
+		m.ActiveWorkers,
+		m.ClaimsTotal,
+		m.JobsCompleted,
+		m.JobsFailed,
+		m.JobDuration,
+		m.LeaseExtensions,
+		m.InFlightJobs,
+		m.StepsTotal,
+		m.StepDuration,
+		m.StepsResumed,
+		m.LLMCalls,
+		m.LLMDuration,
+		m.LLMTokens,
+		m.LLMErrors,
+		m.RateLimitWaits,
+		m.RateLimitWaitTime,
+	)
+
+	return m
 }
 
-// New returns an empty counter store.
-func New() *Metrics {
-	return &Metrics{rows: make(map[string]*row)}
+// Handler returns an http.Handler that exposes the metrics in Prometheus exposition format.
+// Use this in HTTP servers to serve /metrics.
+// Returns a handler that serves 404 if m is nil.
+func (m *Metrics) Handler() http.Handler {
+	if m == nil || m.Registry == nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "metrics disabled", http.StatusNotFound)
+		})
+	}
+	return promhttp.HandlerFor(m.Registry, promhttp.HandlerOpts{})
 }
 
-// Inc increments a counter by 1.
-func (m *Metrics) Inc(name string, labels []Label) {
-	m.Add(name, labels, 1)
-}
-
-// Add increments a counter by delta.
-func (m *Metrics) Add(name string, labels []Label, delta float64) {
-	if m == nil || delta == 0 {
-		return
-	}
-	ls := sortedLabels(labels)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key := makeKey(name, ls)
-	r, ok := m.rows[key]
-	if !ok {
-		r = &row{name: name, labels: ls}
-		m.rows[key] = r
-	}
-	r.value += delta
-}
-
-// Value returns the current value of a counter (0 if never incremented).
-func (m *Metrics) Value(name string, labels []Label) float64 {
-	if m == nil {
-		return 0
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if r, ok := m.rows[makeKey(name, sortedLabels(labels))]; ok {
-		return r.value
-	}
-	return 0
-}
-
-// Render serializes the store in Prometheus text exposition format, one # TYPE
-// line per metric name followed by its sample lines (name{labels} value).
-func (m *Metrics) Render() string {
-	if m == nil {
-		return ""
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	keys := make([]string, 0, len(m.rows))
-	for k := range m.rows {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	var b strings.Builder
-	seenType := make(map[string]bool)
-	for _, k := range keys {
-		r := m.rows[k]
-		if !seenType[r.name] {
-			seenType[r.name] = true
-			b.WriteString("# TYPE ")
-			b.WriteString(r.name)
-			b.WriteString(" counter\n")
-		}
-		fmt.Fprintf(&b, "%s %g\n", r.nameWithLabels(), r.value)
-	}
-	return b.String()
-}
-
-// ServeHTTP renders the store for a Prometheus scrape.
-func (m *Metrics) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
-	if m == nil {
-		http.Error(w, "metrics disabled", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	io.WriteString(w, m.Render())
-}
-
-func (r *row) nameWithLabels() string {
-	if len(r.labels) == 0 {
-		return r.name
-	}
-	var b strings.Builder
-	b.WriteString(r.name)
-	b.WriteByte('{')
-	for i, l := range r.labels {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteString(l.Name)
-		b.WriteString("=\"")
-		b.WriteString(l.Value)
-		b.WriteByte('"')
-	}
-	b.WriteByte('}')
-	return b.String()
-}
-
-func sortedLabels(labels []Label) []Label {
-	ls := append([]Label(nil), labels...)
-	sort.Slice(ls, func(i, j int) bool { return ls[i].Name < ls[j].Name })
-	return ls
-}
-
-// makeKey produces a stable lookup key from a name and its sorted labels.
-func makeKey(name string, labels []Label) string {
-	var b strings.Builder
-	b.WriteString(name)
-	for _, l := range labels {
-		b.WriteByte(0x00)
-		b.WriteString(l.Name)
-		b.WriteByte('=')
-		b.WriteString(l.Value)
-	}
-	return b.String()
+// ServeHTTP implements http.Handler for backward compatibility.
+// It delegates to Handler().
+func (m *Metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	m.Handler().ServeHTTP(w, r)
 }

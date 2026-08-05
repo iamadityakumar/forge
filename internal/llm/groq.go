@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"forge/internal/trace"
 )
 
 type GroqBackend struct {
@@ -93,6 +95,7 @@ func (g *GroqBackend) Complete(ctx context.Context, req CompleteRequest) (Comple
 		if g.apiKey != "" {
 			httpReq.Header.Set("Authorization", "Bearer "+g.apiKey)
 		}
+		trace.InjectW3C(ctx, httpReq)
 
 		resp, err := g.client.Do(httpReq)
 		if err != nil {

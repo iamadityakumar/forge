@@ -333,6 +333,17 @@ func (s *chaosStore) RenewLease(_ context.Context, jobID uuid.UUID, epoch int, l
 func (s *chaosStore) Heartbeat(_ context.Context, _ string, _ string) error { return nil }
 func (s *chaosStore) Ping(_ context.Context) error                          { return nil }
 func (s *chaosStore) Close() error                                          { return nil }
+func (s *chaosStore) CountActiveWorkers(_ context.Context, _ time.Duration) (int, error) { return 1, nil }
+
+func (s *chaosStore) SetTraceContext(_ context.Context, jobID uuid.UUID, epoch int, tc json.RawMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.jobs[jobID]
+	if !ok { return store.ErrNotFound }
+	if j.LeaseEpoch != epoch { return store.ErrFenced }
+	j.TraceContext = tc
+	return nil
+}
 
 // execCounts returns a copy of the exactly-once counter for assertions.
 func (s *chaosStore) execCounts() map[stepKey]int {
@@ -444,7 +455,7 @@ func TestChaosRecoveryKillsExactlyOnce(t *testing.T) {
 		runWG.Add(1)
 		go func() {
 			defer runWG.Done()
-			_ = Run(wCtx, fs, name, lease, concurrency)
+			_ = Run(wCtx, fs, name, lease, concurrency, nil)
 		}()
 	}
 	for i := 0; i < numWorkers; i++ {

@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"context"
@@ -88,7 +88,7 @@ func main() {
 	// Week 5: Prometheus seed metrics endpoint.
 	// Each worker serves its own /metrics on METRICS_PORT (default 9091). After a
 	// burst run the counters are non-zero, proving backpressure is observable.
-	metricsStore := metrics.New()
+	metricsStore := metrics.New("forge_worker")
 
 	// Week 5: Rate Limiting configuration.
 	//
@@ -170,7 +170,7 @@ func main() {
 		log.Fatalf("failed to register run_tests tool: %v", err)
 	}
 
-	agentHandler := agent.New(backend, reg)
+	agentHandler := agent.New(backend, reg, metricsStore)
 	worker.RegisterHandler("cp_solve", agentHandler)
 	slog.Info("registered agent handler", "task_type", "cp_solve", "max_steps", agentHandler.MaxSteps())
 
@@ -197,7 +197,7 @@ func main() {
 	defer cancel()
 
 	// Run the polling loop — blocks until ctx is cancelled.
-	if err := worker.Run(ctx, pgStore, workerID, lease, concurrency); err != nil && err != context.Canceled {
+	if err := worker.Run(ctx, pgStore, workerID, lease, concurrency, metricsStore); err != nil && err != context.Canceled {
 		log.Fatalf("worker stopped: %v", err)
 	}
 	slog.Info("worker shut down cleanly", "worker_id", workerID)

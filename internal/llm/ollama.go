@@ -1,4 +1,4 @@
-package llm
+﻿package llm
 
 import (
 	"bytes"
@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"forge/internal/trace"
 )
 
 type OllamaBackend struct {
@@ -73,6 +75,7 @@ func (o *OllamaBackend) Complete(ctx context.Context, req CompleteRequest) (Comp
 			return CompleteResponse{}, fmt.Errorf("ollama req build: %w", err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		trace.InjectW3C(ctx, httpReq)
 
 		resp, err := o.client.Do(httpReq)
 		if err != nil {

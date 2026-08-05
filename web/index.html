@@ -1,0 +1,156 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Forge — Live Observability Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-icon">F</div>
+      <div class="brand-title">Forge</div>
+      <div class="brand-subtitle">Observability Engine v0.6.0</div>
+    </div>
+    <div class="system-status-bar">
+      <div class="status-indicator" id="systemStatus">
+        <div class="pulse-dot" id="statusDot"></div>
+        <span id="statusText">System Healthy</span>
+      </div>
+      <div class="meta-info">
+        <div class="meta-item">DB: <span id="dbStatus">checking...</span></div>
+        <div class="meta-item">Workers Online: <span id="activeWorkersCount">0</span></div>
+        <div class="meta-item">Uptime: <span id="uptimeText">0s</span></div>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <!-- Stat Tiles -->
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-header">Jobs Submitted</div>
+        <div class="stat-value" id="statSubmitted">0</div>
+        <div class="stat-subtext">Total HTTP submissions</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">Completed</div>
+        <div class="stat-value" id="statCompleted" style="color: var(--accent-emerald);">0</div>
+        <div class="stat-subtext">Fenced success</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">Failed / Dead-Letter</div>
+        <div class="stat-value" id="statFailed" style="color: var(--accent-rose);">0</div>
+        <div class="stat-subtext">Poison messages</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">Queue Backpressure</div>
+        <div class="stat-value" id="statPending" style="color: var(--accent-amber);">0</div>
+        <div class="stat-subtext">Pending jobs</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">Active Workers</div>
+        <div class="stat-value" id="statWorkers" style="color: var(--accent-indigo);">0</div>
+        <div class="stat-subtext">Heartbeating fleet</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">Rate Limit Waits</div>
+        <div class="stat-value" id="statWaits" style="color: var(--accent-purple);">0</div>
+        <div class="stat-subtext">Backpressure delays</div>
+      </div>
+    </section>
+
+    <!-- Worker Fleet Panel -->
+    <section class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <span>Worker Fleet Status</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="workers-grid" id="workersGrid">
+          <div class="empty-state">Discovering workers...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Metrics Charts Row -->
+    <section class="charts-grid">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Job Status Distribution</div>
+        </div>
+        <div class="card-body">
+          <div class="chart-container">
+            <canvas id="chartJobStatus"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Step Latency Histogram (Seconds)</div>
+        </div>
+        <div class="card-body">
+          <div class="chart-container">
+            <canvas id="chartStepDuration"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">LLM Token Usage (Prompt vs Completion)</div>
+        </div>
+        <div class="card-body">
+          <div class="chart-container">
+            <canvas id="chartTokens"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Jobs Table & Live Trace Timeline -->
+    <section class="card">
+      <div class="card-header">
+        <div class="card-title">Recent Jobs & Live Step Timeline</div>
+      </div>
+      <div class="card-body">
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Job ID</th>
+                <th>Task Type</th>
+                <th>Status</th>
+                <th>Attempts</th>
+                <th>Claimed By</th>
+                <th>Created At</th>
+              </tr>
+            </thead>
+            <tbody id="jobsTableBody">
+              <tr>
+                <td colspan="6" class="empty-state">Loading jobs...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div id="timelineContainer" style="display: none;" class="timeline-card">
+          <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+            <div style="font-weight: 600; font-size: 14px;">
+              Job Step Timeline: <span id="selectedJobId" class="code-pill"></span>
+            </div>
+            <div id="reclaimNotice" style="font-size: 12px; color: var(--accent-indigo); display: none;">
+              ⚡ Cross-worker resumption detected across multiple workers!
+            </div>
+          </div>
+          <div class="timeline" id="stepTimeline"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/vendor/chart.umd.js"></script>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

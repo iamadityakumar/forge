@@ -1,6 +1,7 @@
 ﻿package worker
 
 import (
+	"forge/internal/metrics"
 	"context"
 	"fmt"
 	"testing"
@@ -35,7 +36,7 @@ func TestRateLimitedAgent_StillExactlyOnce(t *testing.T) {
 	// Set up a restrictive rate limiter: 50 tokens per minute
 	clock := ratelimit.NewManualClock(time.Now())
 	bucket := ratelimit.NewMemoryBucket(50, time.Minute, clock)
-	rlBackend := llm.NewRateLimitedBackend(llm.NewFakeBackend(), bucket)
+	rlBackend := llm.NewRateLimitedBackend(llm.NewFakeBackend(), bucket, metrics.New("test"))
 
 	lease := 500 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -46,7 +47,7 @@ func TestRateLimitedAgent_StillExactlyOnce(t *testing.T) {
 	for w := 0; w < numWorkers; w++ {
 		workerID := fmt.Sprintf("rl-worker-%d", w)
 		go func(id string) {
-			_ = Run(ctx, s, id, lease, 1)
+			_ = Run(ctx, s, id, lease, 1, nil)
 		}(workerID)
 	}
 

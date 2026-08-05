@@ -82,7 +82,7 @@ func TestAgentLoop_RealStoreSmoke(t *testing.T) {
 		t.Fatalf("start job: %v", err)
 	}
 
-	ag := New(fakeLLM, reg)
+	ag := New(fakeLLM, reg, nil)
 	err = ag.Run(ctx, s, claimed, claimed.LeaseEpoch, "smoke-worker")
 	if err != nil {
 		t.Fatalf("agent run: %v", err)

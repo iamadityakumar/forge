@@ -28,12 +28,12 @@ type Job struct {
 	RunAt       *time.Time `json:"run_at,omitempty"         db:"run_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"   db:"completed_at"`
 	DeadLetter  bool       `json:"dead_letter"              db:"dead_letter"`
+
+	// Week 6 field — OpenTelemetry trace context propagation.
+	TraceContext json.RawMessage `json:"trace_context,omitempty" db:"trace_context"`
 }
 
-// JobStep is a single checkpointed, resumable step of a Job (the job_steps
-// table). Resumption on reclaim starts at MAX(step_number) WHERE status =
-// 'completed' + 1. For Week 3 the step_type is "segment" (dummy work); Week 4
-// replaces it with real plan / tool_call / observation steps.
+// JobStep is a single checkpointed, resumable step of a Job.
 type JobStep struct {
 	ID         uuid.UUID       `json:"id"            db:"id"`
 	JobID      uuid.UUID       `json:"job_id"         db:"job_id"`
@@ -61,14 +61,12 @@ type LLMCall struct {
 	CreatedAt        time.Time `json:"created_at"        db:"created_at"`
 }
 
-// JobStep status constants.
 const (
 	StepRunning   = "running"
 	StepCompleted = "completed"
 	StepFailed    = "failed"
 )
 
-// Job status constants — the only valid values for Job.Status.
 const (
 	StatusPending   = "pending"
 	StatusClaimed   = "claimed"
@@ -77,13 +75,8 @@ const (
 	StatusFailed    = "failed"
 )
 
-// StatusDeadLetter is a VIRTUAL filter value (not a real Job.Status) accepted
-// by ListJobs: jobs whose execution exhausted max_attempts and were marked
-// dead_letter=true (status='failed', dead_letter=true). Surfaced via
-// GET /jobs?status=dead_letter. Real jobs are never stored with this value.
 const StatusDeadLetter = "dead_letter"
 
-// Worker is the record for each registered worker process.
 type Worker struct {
 	ID            string    `json:"id"             db:"id"`
 	Hostname      string    `json:"hostname"       db:"hostname"`
