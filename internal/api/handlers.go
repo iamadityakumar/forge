@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -148,10 +151,31 @@ func (h *Handler) getJobHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (h *Handler) listJobsHandler(w http.ResponseWriter, r *http.Request) {
-	status := r.URL.Query().Get("status")
-	limit := 50
+	opts := store.ListJobsOpts{
+		Status:   r.URL.Query().Get("status"),
+		TaskType: r.URL.Query().Get("task_type"),
+		WorkerID: r.URL.Query().Get("worker"),
+		Limit:    50,
+		Offset:   0,
+	}
 
-	jobs, err := h.store.ListJobs(r.Context(), status, limit)
+	if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
+		if since, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+			opts.Since = &since
+		}
+	}
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 {
+			opts.Limit = limit
+		}
+	}
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if offset, err := strconv.Atoi(offsetStr); err == nil && offset >= 0 {
+			opts.Offset = offset
+		}
+	}
+
+	jobs, err := h.store.ListJobs(r.Context(), opts)
 	if err != nil {
 		slog.Error("list jobs failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list jobs")
@@ -250,6 +274,66 @@ func (h *Handler) listWorkersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(workers)
 	writeJSON(w, http.StatusOK, map[string]any{"workers": workers})
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/workers/metrics — Batched fetch of all worker metrics
+// ---------------------------------------------------------------------------
+
+func (h *Handler) listWorkersMetricsHandler(w http.ResponseWriter, r *http.Request) {
+	type workerMetrics struct {
+		Name    string `json:"name"`
+		Online  bool   `json:"online"`
+		Metrics string `json:"metrics"` // raw Prometheus text
+		Error   string `json:"error,omitempty"`
+	}
+
+	var wg sync.WaitGroup
+	results := make([]workerMetrics, len(h.workerURLs))
+	i := 0
+	for name := range h.workerURLs {
+		results[i].Name = name
+		i++
+	}
+	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
+
+	for idx := range results {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			name := results[idx].Name
+			targetURL := h.workerURLs[name]
+
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
+			if err != nil {
+				results[idx].Error = err.Error()
+				return
+			}
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				results[idx].Online = false
+				results[idx].Error = err.Error()
+				return
+			}
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				results[idx].Error = err.Error()
+				return
+			}
+
+			results[idx].Online = resp.StatusCode == http.StatusOK
+			results[idx].Metrics = string(body)
+			if resp.StatusCode != http.StatusOK {
+				results[idx].Error = fmt.Sprintf("status %d", resp.StatusCode)
+			}
+		}(idx)
+	}
+	wg.Wait()
+
+	writeJSON(w, http.StatusOK, map[string]any{"workers": results})
 }
 
 // ---------------------------------------------------------------------------

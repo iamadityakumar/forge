@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -100,46 +101,64 @@ func (s *PgStore) GetJob(ctx context.Context, id uuid.UUID) (Job, error) {
 	return job, nil
 }
 
-func (s *PgStore) ListJobs(ctx context.Context, status string, limit int) ([]Job, error) {
-	if limit <= 0 {
-		limit = 50
+func (s *PgStore) ListJobs(ctx context.Context, opts ListJobsOpts) ([]Job, error) {
+	if opts.Limit <= 0 {
+		opts.Limit = 50
+	}
+	if opts.Limit > 1000 {
+		opts.Limit = 1000 // hard cap
+	}
+	if opts.Offset < 0 {
+		opts.Offset = 0
 	}
 
-	var query string
-	switch status {
-	case StatusDeadLetter:
-		query = `
-			SELECT id, task_type, payload, status, priority, idempotency_key,
-			       claimed_by, lease_expires_at, attempt_count, max_attempts,
-			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter, trace_context
-			FROM jobs
-			WHERE dead_letter = true
-			ORDER BY created_at DESC
-			LIMIT $1
-		`
-		return s.scanJobs(ctx, query, limit)
-	case "":
-		query = `
-			SELECT id, task_type, payload, status, priority, idempotency_key,
-			       claimed_by, lease_expires_at, attempt_count, max_attempts,
-			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter, trace_context
-			FROM jobs
-			ORDER BY created_at DESC
-			LIMIT $1
-		`
-		return s.scanJobs(ctx, query, limit)
-	default:
-		query = `
-			SELECT id, task_type, payload, status, priority, idempotency_key,
-			       claimed_by, lease_expires_at, attempt_count, max_attempts,
-			       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter, trace_context
-			FROM jobs
-			WHERE status = $1
-			ORDER BY created_at DESC
-			LIMIT $2
-		`
-		return s.scanJobs(ctx, query, status, limit)
+	// Build dynamic query
+	baseQuery := `
+		SELECT id, task_type, payload, status, priority, idempotency_key,
+		       claimed_by, lease_expires_at, attempt_count, max_attempts,
+		       error_message, created_at, lease_epoch, run_at, completed_at, dead_letter, trace_context
+		FROM jobs
+	`
+	whereClauses := []string{}
+	args := []any{}
+	argIdx := 1
+
+	if opts.Status != "" {
+		if opts.Status == StatusDeadLetter {
+			whereClauses = append(whereClauses, "dead_letter = true")
+		} else {
+			whereClauses = append(whereClauses, fmt.Sprintf("status = $%d", argIdx))
+			args = append(args, opts.Status)
+			argIdx++
+		}
 	}
+
+	if opts.TaskType != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("task_type = $%d", argIdx))
+		args = append(args, opts.TaskType)
+		argIdx++
+	}
+
+	if opts.WorkerID != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("claimed_by = $%d", argIdx))
+		args = append(args, opts.WorkerID)
+		argIdx++
+	}
+
+	if opts.Since != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("created_at >= $%d", argIdx))
+		args = append(args, *opts.Since)
+		argIdx++
+	}
+
+	if len(whereClauses) > 0 {
+		baseQuery += " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	baseQuery += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	args = append(args, opts.Limit, opts.Offset)
+
+	return s.scanJobs(ctx, baseQuery, args...)
 }
 
 func (s *PgStore) scanJobs(ctx context.Context, query string, args ...any) ([]Job, error) {

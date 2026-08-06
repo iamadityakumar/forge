@@ -408,7 +408,7 @@ func TestPgStore_RetryAndDeadLetter(t *testing.T) {
 		t.Errorf("dead-lettered job should never be reclaimed: got job=%v err=%v", stolen, err)
 	}
 	// And it must surface via the virtual dead_letter filter.
-	dl, err := s.ListJobs(ctx, StatusDeadLetter, 50)
+	dl, err := s.ListJobs(ctx, ListJobsOpts{Status: StatusDeadLetter, Limit: 50})
 	if err != nil {
 		t.Fatalf("list dead_letter: %v", err)
 	}

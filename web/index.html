@@ -33,31 +33,37 @@
         <div class="stat-header">Jobs Submitted</div>
         <div class="stat-value" id="statSubmitted">0</div>
         <div class="stat-subtext">Total HTTP submissions</div>
+        <canvas id="sparklineSubmitted" class="sparkline-canvas" width="120" height="30" aria-label="Jobs submitted trend"></canvas>
       </div>
       <div class="stat-card">
         <div class="stat-header">Completed</div>
         <div class="stat-value" id="statCompleted" style="color: var(--accent-emerald);">0</div>
         <div class="stat-subtext">Fenced success</div>
+        <canvas id="sparklineCompleted" class="sparkline-canvas" width="120" height="30" aria-label="Jobs completed trend"></canvas>
       </div>
       <div class="stat-card">
         <div class="stat-header">Failed / Dead-Letter</div>
         <div class="stat-value" id="statFailed" style="color: var(--accent-rose);">0</div>
         <div class="stat-subtext">Poison messages</div>
+        <canvas id="sparklineFailed" class="sparkline-canvas" width="120" height="30" aria-label="Jobs failed trend"></canvas>
       </div>
       <div class="stat-card">
         <div class="stat-header">Queue Backpressure</div>
         <div class="stat-value" id="statPending" style="color: var(--accent-amber);">0</div>
         <div class="stat-subtext">Pending jobs</div>
+        <canvas id="sparklinePending" class="sparkline-canvas" width="120" height="30" aria-label="Pending jobs trend"></canvas>
       </div>
       <div class="stat-card">
         <div class="stat-header">Active Workers</div>
         <div class="stat-value" id="statWorkers" style="color: var(--accent-indigo);">0</div>
         <div class="stat-subtext">Heartbeating fleet</div>
+        <canvas id="sparklineWorkers" class="sparkline-canvas" width="120" height="30" aria-label="Active workers trend"></canvas>
       </div>
       <div class="stat-card">
         <div class="stat-header">Rate Limit Waits</div>
         <div class="stat-value" id="statWaits" style="color: var(--accent-purple);">0</div>
         <div class="stat-subtext">Backpressure delays</div>
+        <canvas id="sparklineWaits" class="sparkline-canvas" width="120" height="30" aria-label="Rate limit waits trend"></canvas>
       </div>
     </section>
 
@@ -135,22 +141,28 @@
           </table>
         </div>
 
+        <div id="jobsPagination" class="pagination-container" aria-label="Jobs pagination"></div>
+
         <div id="timelineContainer" style="display: none;" class="timeline-card">
-          <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+          <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
             <div style="font-weight: 600; font-size: 14px;">
               Job Step Timeline: <span id="selectedJobId" class="code-pill"></span>
             </div>
-            <div id="reclaimNotice" style="font-size: 12px; color: var(--accent-indigo); display: none;">
-              ⚡ Cross-worker resumption detected across multiple workers!
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div id="reclaimNotice" style="font-size: 12px; color: var(--accent-indigo); display: none;">
+                ⚡ Cross-worker resumption detected across multiple workers!
+              </div>
+              <a id="jaegerLink" href="#" target="_blank" rel="noopener" style="display: none; font-size: 12px; color: var(--accent-indigo); text-decoration: none; padding: 4px 8px; border: 1px solid var(--accent-indigo); border-radius: 4px; background: rgba(99, 102, 241, 0.1); transition: all 0.2s;">🔗 View in Jaeger</a>
             </div>
           </div>
           <div class="timeline" id="stepTimeline"></div>
+          <div id="llmCallsContainer" class="llm-calls-panel" style="margin-top: 24px; display: none;"></div>
         </div>
       </div>
     </section>
   </main>
 
   <script src="/static/vendor/chart.umd.js"></script>
-  <script src="/static/dashboard.js"></script>
+  <script type="module" src="/static/modules/main.js"></script>
 </body>
 </html>

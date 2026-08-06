@@ -83,17 +83,39 @@ func (m *memStore) GetJob(_ context.Context, id uuid.UUID) (store.Job, error) {
 	return j, nil
 }
 
-func (m *memStore) ListJobs(_ context.Context, status string, limit int) ([]store.Job, error) {
+func (m *memStore) ListJobs(_ context.Context, opts store.ListJobsOpts) ([]store.Job, error) {
 	var out []store.Job
 	for _, j := range m.jobs {
-		// status=="dead_letter" is a virtual filter (no real job carries it);
-		// the in-memory mock has no dead-letter jobs, so it returns [].
-		if status == "" || status == store.StatusDeadLetter || j.Status == status {
-			out = append(out, j)
+		if opts.Status != "" {
+			if opts.Status == store.StatusDeadLetter {
+				// status=="dead_letter" is a virtual filter; in-memory mock has no dead-letter jobs
+				continue
+			}
+			if j.Status != opts.Status {
+				continue
+			}
 		}
-		if len(out) >= limit {
+		if opts.TaskType != "" && j.TaskType != opts.TaskType {
+			continue
+		}
+		if opts.WorkerID != "" {
+			if j.ClaimedBy == nil || *j.ClaimedBy != opts.WorkerID {
+				continue
+			}
+		}
+		if opts.Since != nil && j.CreatedAt.Before(*opts.Since) {
+			continue
+		}
+		out = append(out, j)
+		if opts.Limit > 0 && len(out) >= opts.Limit {
 			break
 		}
+	}
+	// Apply offset
+	if opts.Offset > 0 && opts.Offset < len(out) {
+		out = out[opts.Offset:]
+	} else if opts.Offset >= len(out) {
+		out = []store.Job{}
 	}
 	return out, nil
 }

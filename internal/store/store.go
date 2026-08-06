@@ -15,10 +15,19 @@ var (
 	ErrFenced = errors.New("worker fenced: lease epoch mismatch")
 )
 
+type ListJobsOpts struct {
+	Status     string
+	TaskType   string
+	WorkerID   string
+	Since      *time.Time
+	Limit      int
+	Offset     int
+}
+
 type JobStore interface {
 	CreateJob(ctx context.Context, taskType string, payload json.RawMessage, priority int, idempotencyKey string) (Job, error)
 	GetJob(ctx context.Context, id uuid.UUID) (Job, error)
-	ListJobs(ctx context.Context, status string, limit int) ([]Job, error)
+	ListJobs(ctx context.Context, opts ListJobsOpts) ([]Job, error)
 	CountPendingJobs(ctx context.Context) (int, error)
 	ClaimJob(ctx context.Context, workerID string, leaseDuration time.Duration) (*Job, error)
 	StartJob(ctx context.Context, jobID uuid.UUID, epoch int) error

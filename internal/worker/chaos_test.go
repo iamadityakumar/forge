@@ -118,14 +118,35 @@ func (s *chaosStore) GetJob(_ context.Context, id uuid.UUID) (store.Job, error) 
 	return j.Job, nil
 }
 
-func (s *chaosStore) ListJobs(_ context.Context, status string, _ int) ([]store.Job, error) {
+func (s *chaosStore) ListJobs(_ context.Context, opts store.ListJobsOpts) ([]store.Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []store.Job
 	for _, j := range s.jobs {
-		if status == "" || j.Status == status {
-			out = append(out, j.Job)
+		if opts.Status != "" && j.Status != opts.Status {
+			continue
 		}
+		if opts.TaskType != "" && j.TaskType != opts.TaskType {
+			continue
+		}
+		if opts.WorkerID != "" {
+			if j.ClaimedBy == nil || *j.ClaimedBy != opts.WorkerID {
+				continue
+			}
+		}
+		if opts.Since != nil && j.CreatedAt.Before(*opts.Since) {
+			continue
+		}
+		out = append(out, j.Job)
+		if opts.Limit > 0 && len(out) >= opts.Limit {
+			break
+		}
+	}
+	// Apply offset
+	if opts.Offset > 0 && opts.Offset < len(out) {
+		out = out[opts.Offset:]
+	} else if opts.Offset >= len(out) {
+		out = []store.Job{}
 	}
 	return out, nil
 }

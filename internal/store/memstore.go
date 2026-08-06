@@ -119,18 +119,42 @@ func (m *MemStore) GetJob(_ context.Context, id uuid.UUID) (Job, error) {
 	return j, nil
 }
 
-func (m *MemStore) ListJobs(_ context.Context, status string, limit int) ([]Job, error) {
+func (m *MemStore) ListJobs(_ context.Context, opts ListJobsOpts) ([]Job, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	var out []Job
 	for _, j := range m.jobs {
-		if status == "" || status == StatusDeadLetter || j.Status == status {
-			out = append(out, j)
+		if opts.Status != "" {
+			if opts.Status == StatusDeadLetter {
+				if !j.DeadLetter {
+					continue
+				}
+			} else if j.Status != opts.Status {
+				continue
+			}
 		}
-		if limit > 0 && len(out) >= limit {
+		if opts.TaskType != "" && j.TaskType != opts.TaskType {
+			continue
+		}
+		if opts.WorkerID != "" {
+			if j.ClaimedBy == nil || *j.ClaimedBy != opts.WorkerID {
+				continue
+			}
+		}
+		if opts.Since != nil && j.CreatedAt.Before(*opts.Since) {
+			continue
+		}
+		out = append(out, j)
+		if opts.Limit > 0 && len(out) >= opts.Limit {
 			break
 		}
+	}
+	// Apply offset
+	if opts.Offset > 0 && opts.Offset < len(out) {
+		out = out[opts.Offset:]
+	} else if opts.Offset >= len(out) {
+		out = []Job{}
 	}
 	return out, nil
 }

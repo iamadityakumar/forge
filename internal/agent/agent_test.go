@@ -75,7 +75,7 @@ func (m *memoryStore) GetJob(ctx context.Context, id uuid.UUID) (store.Job, erro
 	return *j, nil
 }
 
-func (m *memoryStore) ListJobs(ctx context.Context, status string, limit int) ([]store.Job, error) {
+func (m *memoryStore) ListJobs(ctx context.Context, opts store.ListJobsOpts) ([]store.Job, error) {
 	return nil, nil
 }
 
