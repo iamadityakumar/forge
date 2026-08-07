@@ -38,6 +38,8 @@ services:
       # When set (e.g. http://jaeger:4318 with the observability profile), spans
       # are also exported via OTLP alongside the slog span lines.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    volumes:
+      - ./web:/app/web
     depends_on:
       postgres:
         condition: service_healthy

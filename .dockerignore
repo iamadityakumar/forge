@@ -21,5 +21,10 @@ coverage.*
 # Graph / notes (not needed at runtime)
 graphify-out
 .claude
+
+# Include web assets
+!web/
+
+# Exclude markdown files (except README)
 *.md
 !README.md
