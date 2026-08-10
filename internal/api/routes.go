@@ -26,6 +26,7 @@ func RegisterRoutes(r chi.Router, h *Handler) {
 	r.Get("/api/workers", h.listWorkersHandler)
 	r.Get("/api/workers/metrics", h.listWorkersMetricsHandler)
 	r.Get("/api/worker-metrics/{worker}", workerMetricsProxy(h.workerURLs))
+	r.Get("/api/stats", h.statsHandler)
 
 	// Dashboard static files serving
 	workDir, _ := os.Getwd()

@@ -108,6 +108,29 @@ func (s *chaosStore) CountPendingJobs(_ context.Context) (int, error) {
 	return count, nil
 }
 
+func (s *chaosStore) CountJobs(_ context.Context) (store.JobCounts, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var c store.JobCounts
+	for _, j := range s.jobs {
+		c.Total++
+		switch j.Status {
+		case store.StatusPending:
+			c.Pending++
+		case store.StatusClaimed, store.StatusRunning:
+			c.Running++
+		case store.StatusCompleted:
+			c.Completed++
+		case store.StatusFailed:
+			c.Failed++
+		}
+		if j.DeadLetter {
+			c.DeadLetter++
+		}
+	}
+	return c, nil
+}
+
 func (s *chaosStore) GetJob(_ context.Context, id uuid.UUID) (store.Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

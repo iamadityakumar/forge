@@ -503,6 +503,25 @@ func (s *PgStore) CountPendingJobs(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+func (s *PgStore) CountJobs(ctx context.Context) (JobCounts, error) {
+	var c JobCounts
+	query := `
+		SELECT
+			COUNT(*)                                          AS total,
+			COUNT(*) FILTER (WHERE status = 'pending')        AS pending,
+			COUNT(*) FILTER (WHERE status IN ('claimed','running')) AS running,
+			COUNT(*) FILTER (WHERE status = 'completed')      AS completed,
+			COUNT(*) FILTER (WHERE status = 'failed')         AS failed,
+			COUNT(*) FILTER (WHERE dead_letter = true)        AS dead_letter
+		FROM jobs
+	`
+	err := s.db.QueryRowContext(ctx, query).Scan(&c.Total, &c.Pending, &c.Running, &c.Completed, &c.Failed, &c.DeadLetter)
+	if err != nil {
+		return JobCounts{}, fmt.Errorf("count jobs: %w", err)
+	}
+	return c, nil
+}
+
 func (s *PgStore) RecordLLMCall(ctx context.Context, call LLMCall) (uuid.UUID, error) {
 	if call.ID == uuid.Nil {
 		call.ID = uuid.New()

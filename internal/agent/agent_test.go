@@ -59,6 +59,29 @@ func (m *memoryStore) CountPendingJobs(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+func (m *memoryStore) CountJobs(ctx context.Context) (store.JobCounts, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var c store.JobCounts
+	for _, j := range m.jobs {
+		c.Total++
+		switch j.Status {
+		case store.StatusPending:
+			c.Pending++
+		case store.StatusClaimed, store.StatusRunning:
+			c.Running++
+		case store.StatusCompleted:
+			c.Completed++
+		case store.StatusFailed:
+			c.Failed++
+		}
+		if j.DeadLetter {
+			c.DeadLetter++
+		}
+	}
+	return c, nil
+}
+
 func (m *memoryStore) SetTraceContext(ctx context.Context, jobID uuid.UUID, epoch int, tc json.RawMessage) error { return nil }
 
 func (m *memoryStore) CountActiveWorkers(ctx context.Context, within time.Duration) (int, error) {
@@ -469,4 +492,3 @@ func TestCompleteAndRecord(t *testing.T) {
 		t.Errorf("expected workerID 'w-123', got %v", calls[0].WorkerID)
 	}
 }
-

@@ -75,6 +75,27 @@ func (m *memStore) CountPendingJobs(_ context.Context) (int, error) {
 	return count, nil
 }
 
+func (m *memStore) CountJobs(_ context.Context) (store.JobCounts, error) {
+	var c store.JobCounts
+	for _, j := range m.jobs {
+		c.Total++
+		switch j.Status {
+		case store.StatusPending:
+			c.Pending++
+		case store.StatusClaimed, store.StatusRunning:
+			c.Running++
+		case store.StatusCompleted:
+			c.Completed++
+		case store.StatusFailed:
+			c.Failed++
+		}
+		if j.DeadLetter {
+			c.DeadLetter++
+		}
+	}
+	return c, nil
+}
+
 func (m *memStore) GetJob(_ context.Context, id uuid.UUID) (store.Job, error) {
 	j, ok := m.jobs[id]
 	if !ok {

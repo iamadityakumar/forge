@@ -33,6 +33,16 @@ type Job struct {
 	TraceContext json.RawMessage `json:"trace_context,omitempty" db:"trace_context"`
 }
 
+// JobCounts is an aggregate snapshot of job rows by lifecycle status.
+type JobCounts struct {
+	Total      int `json:"total"`
+	Pending    int `json:"pending"`
+	Running    int `json:"running"` // claimed + running (in-flight)
+	Completed  int `json:"completed"`
+	Failed     int `json:"failed"`
+	DeadLetter int `json:"dead_letter"`
+}
+
 // JobStep is a single checkpointed, resumable step of a Job.
 type JobStep struct {
 	ID         uuid.UUID       `json:"id"            db:"id"`

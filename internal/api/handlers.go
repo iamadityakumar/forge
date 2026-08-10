@@ -375,6 +375,19 @@ func (h *Handler) healthHandler(w http.ResponseWriter, r *http.Request) {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// statsHandler reports job counts aggregated from the jobs table (source of
+// truth) rather than per-process in-memory counters, so dashboard tiles stay
+// consistent across restarts.
+func (h *Handler) statsHandler(w http.ResponseWriter, r *http.Request) {
+	counts, err := h.store.CountJobs(r.Context())
+	if err != nil {
+		slog.Error("count jobs failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to count jobs")
+		return
+	}
+	writeJSON(w, http.StatusOK, counts)
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

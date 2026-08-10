@@ -172,6 +172,30 @@ func (m *MemStore) CountPendingJobs(_ context.Context) (int, error) {
 	return count, nil
 }
 
+func (m *MemStore) CountJobs(_ context.Context) (JobCounts, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var c JobCounts
+	for _, j := range m.jobs {
+		c.Total++
+		switch j.Status {
+		case StatusPending:
+			c.Pending++
+		case StatusClaimed, StatusRunning:
+			c.Running++
+		case StatusCompleted:
+			c.Completed++
+		case StatusFailed:
+			c.Failed++
+		}
+		if j.DeadLetter {
+			c.DeadLetter++
+		}
+	}
+	return c, nil
+}
+
 func (m *MemStore) ClaimJob(_ context.Context, _ string, _ time.Duration) (*Job, error) {
 	return nil, nil
 }

@@ -29,6 +29,7 @@ type JobStore interface {
 	GetJob(ctx context.Context, id uuid.UUID) (Job, error)
 	ListJobs(ctx context.Context, opts ListJobsOpts) ([]Job, error)
 	CountPendingJobs(ctx context.Context) (int, error)
+	CountJobs(ctx context.Context) (JobCounts, error)
 	ClaimJob(ctx context.Context, workerID string, leaseDuration time.Duration) (*Job, error)
 	StartJob(ctx context.Context, jobID uuid.UUID, epoch int) error
 	CompleteJob(ctx context.Context, jobID uuid.UUID, epoch int) error

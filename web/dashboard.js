@@ -1,4 +1,4 @@
-﻿// Forge Dashboard Engine — High-Performance Chart.js Observability
+// Forge Dashboard Engine — High-Performance Chart.js Observability
 (function () {
   let selectedJobId = null;
   let selectedJobTraceContext = null;
@@ -79,21 +79,23 @@
   let chartTokens = null;
   let sparklineCharts = {}; // statName -> Chart instance
 
-  // Initialize
-  document.addEventListener('DOMContentLoaded', () => {
-    fetchHealth();
-    fetchMetrics();
-    fetchWorkers();
-    fetchJobs();
+ // Initialize
+ document.addEventListener('DOMContentLoaded', () => {
+   fetchHealth();
+   fetchMetrics();
+   fetchWorkers();
+   fetchJobs();
+    fetchJobStats();
 
-    setInterval(fetchHealth, pollInterval);
-    setInterval(fetchMetrics, pollInterval);
-    setInterval(fetchWorkers, pollInterval);
-    setInterval(fetchJobs, pollInterval);
-    setInterval(fetchSelectedTrace, traceInterval);
-  });
+   setInterval(fetchHealth, pollInterval);
+   setInterval(fetchMetrics, pollInterval);
+   setInterval(fetchWorkers, pollInterval);
+   setInterval(fetchJobs, pollInterval);
+    setInterval(fetchJobStats, pollInterval);
+   setInterval(fetchSelectedTrace, traceInterval);
+ });
 
-  // Prometheus Metrics Parser
+ // Prometheus Metrics Parser
   function parsePrometheusText(text) {
     const metrics = {};
     const lines = text.split('\n');
@@ -155,6 +157,32 @@
   }
 
   // Fetch API Metrics (orchestrator + workers)
+  
+  async function fetchHealth() {
+    try {
+      const res = await fetch('/health');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      document.getElementById('dbStatus').textContent = data.db || 'ok';
+      document.getElementById('activeWorkersCount').textContent = data.workers_online ?? 0;
+      document.getElementById('uptimeText').textContent = formatUptime(data.uptime_seconds || 0);
+
+      const dot = document.getElementById('statusDot');
+      const text = document.getElementById('statusText');
+      if (data.status === 'ok') {
+        dot.className = 'pulse-dot';
+        text.textContent = 'System Healthy';
+      } else {
+        dot.className = 'pulse-dot degraded';
+        text.textContent = 'System Degraded';
+      }
+    } catch (err) {
+      document.getElementById('statusDot').className = 'pulse-dot offline';
+      document.getElementById('statusText').textContent = 'System Unreachable';
+    }
+  }
+
   async function fetchMetrics() {
     try {
       // Fetch orchestrator metrics
@@ -358,25 +386,55 @@
     ctx.fill();
   }
 
+  // DB-backed job counts from /api/stats (source of truth for job lifecycle)
+  let dbJobStats = null;
+
+  async function fetchJobStats() {
+    try {
+      const res = await fetch('/api/stats');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      dbJobStats = await res.json();
+
+      // Keep jobs pagination total in sync with the DB row count.
+      if (dbJobStats && typeof dbJobStats.total === 'number') {
+        jobsTotalCount = dbJobStats.total;
+      }
+
+      updateStats();
+      renderPagination();
+    } catch (err) {
+      console.warn('Failed to fetch DB job stats:', err);
+    }
+  }
+
   function updateStats() {
     // Update stat values and history
     const statConfig = [
-      { id: 'statSubmitted', metric: METRIC.jobsSubmitted, fallback: METRIC.workerJobsCompleted, addToHistory: true },
-      { id: 'statCompleted', metric: METRIC.jobsCompleted, fallback: METRIC.workerJobsCompleted, addToHistory: true },
-      { id: 'statFailed', metric: METRIC.jobsFailed, fallback: METRIC.workerJobsFailed, addToHistory: true },
-      { id: 'statPending', metric: METRIC.pendingJobs, fallback: METRIC.workerInFlightJobs, addToHistory: true },
+      { id: 'statSubmitted', metric: METRIC.jobsSubmitted, fallback: METRIC.workerJobsCompleted, db: s => s.total, addToHistory: true },
+      { id: 'statCompleted', metric: METRIC.jobsCompleted, fallback: METRIC.workerJobsCompleted, db: s => s.completed, addToHistory: true },
+      { id: 'statFailed', metric: METRIC.jobsFailed, fallback: METRIC.workerJobsFailed, db: s => s.failed, addToHistory: true },
+      { id: 'statPending', metric: METRIC.pendingJobs, fallback: METRIC.workerInFlightJobs, db: s => s.pending, addToHistory: true },
       { id: 'statWorkers', metric: METRIC.activeWorkers, fallback: METRIC.workerClaims, addToHistory: true },
       { id: 'statWaits', metric: METRIC.rateLimitWaits, fallback: METRIC.workerRateLimitWaits, addToHistory: true },
     ];
 
-    statConfig.forEach(({ id, metric, fallback, addToHistory }) => {
-      const val = sumMetricValAny(metric, fallback);
+    statConfig.forEach(({ id, metric, fallback, db, addToHistory: shouldAddToHistory }) => {
+      // Prefer DB-backed counts (survive restarts) over in-memory Prometheus counters.
+      let val = null;
+      if (db && dbJobStats) {
+        const dbVal = db(dbJobStats);
+        if (typeof dbVal === 'number') val = dbVal;
+      }
+      if (val === null) {
+        val = sumMetricValAny(metric, fallback);
+      }
+
       const el = document.getElementById(id);
       if (el) {
         el.textContent = val;
 
         // Add to history for sparklines
-        if (addToHistory) {
+        if (shouldAddToHistory) {
           addToHistory(metric, val);
         }
 
@@ -505,9 +563,6 @@
       renderPagination();
     } catch (err) {
       console.error('Failed to fetch jobs:', err);
-    renderPagination();
-    } catch (err) {
-      console.error('Failed to fetch jobs:', err);
     }
   }
 
@@ -580,8 +635,18 @@
         fetchJobs();
       });
     }
+  }
 
-    function selectJob(id) {
+  function selectJob(id) {
+    selectedJobId = id;
+    document.getElementById('selectedJobId').textContent = id;
+    document.getElementById('timelineContainer').style.display = 'block';
+    fetchSelectedTrace();
+    fetchJobDetails(id);
+    fetchJobs();
+  }
+
+  async function fetchJobDetails(id) {
     try {
       const res = await fetch(`/jobs/${id}`);
       if (res.ok) {
@@ -875,8 +940,8 @@
     const backends = Array.from(backendMap.keys());
     if (backends.length === 0) {
       // Fallback: try orchestrator namespace, then worker namespace
-      const promptTokens = sumMetricValWithLabelAny(METRIC.LLMTokens, METRIC.workerLLMTokens, { kind: 'prompt' });
-      const compTokens = sumMetricValWithLabelAny(METRIC.LLMTokens, METRIC.workerLLMTokens, { kind: 'completion' });
+      const promptTokens = sumMetricValWithLabelAny(METRIC.llmTokens, METRIC.workerLLMTokens, { kind: 'prompt' });
+      const compTokens = sumMetricValWithLabelAny(METRIC.llmTokens, METRIC.workerLLMTokens, { kind: 'completion' });
       renderSingleBackendChart(canvas, promptTokens, compTokens);
       return;
     }
