@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"forge/internal/clock"
+	"forge/internal/testutil"
 )
 
 func getTestStore(t *testing.T) (*PgStore, func()) {
@@ -420,10 +421,7 @@ func TestPgStore_RetryAndDeadLetter(t *testing.T) {
 // getTestStoreWithClock creates a PgStore with an injected clock for deterministic testing.
 func getTestStoreWithClock(t *testing.T, clk clock.Clock) (*PgStore, func()) {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://postgres:secret@localhost:5432/forge?sslmode=disable"
-	}
+	dbURL := testutil.PrepareTestDB(t, "store_clock")
 
 	store, err := NewPgStore(dbURL, WithClock(clk))
 	if err != nil {
