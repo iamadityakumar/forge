@@ -1,4 +1,4 @@
-﻿package store
+package store
 
 import (
 	"context"
@@ -6,22 +6,23 @@ import (
 	"errors"
 	"time"
 
+	"forge/internal/clock"
 	"github.com/google/uuid"
 )
 
 var (
-	ErrNotFound = errors.New("job not found")
+	ErrNotFound          = errors.New("job not found")
 	ErrInvalidTransition = errors.New("invalid status transition")
-	ErrFenced = errors.New("worker fenced: lease epoch mismatch")
+	ErrFenced            = errors.New("worker fenced: lease epoch mismatch")
 )
 
 type ListJobsOpts struct {
-	Status     string
-	TaskType   string
-	WorkerID   string
-	Since      *time.Time
-	Limit      int
-	Offset     int
+	Status   string
+	TaskType string
+	WorkerID string
+	Since    *time.Time
+	Limit    int
+	Offset   int
 }
 
 type JobStore interface {
@@ -45,4 +46,12 @@ type JobStore interface {
 	SetTraceContext(ctx context.Context, jobID uuid.UUID, epoch int, tc json.RawMessage) error
 	Ping(ctx context.Context) error
 	Close() error
+}
+
+// WithClock sets the clock for time-dependent operations (testing).
+// Defaults to clock.SystemClock{}.
+func WithClock(clk clock.Clock) func(*PgStore) {
+	return func(s *PgStore) {
+		s.clk = clk
+	}
 }

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"forge/internal/clock"
 )
 
 func getTestStore(t *testing.T) (*PgStore, func()) {
@@ -414,5 +416,154 @@ func TestPgStore_RetryAndDeadLetter(t *testing.T) {
 	}
 	if len(dl) != 1 || dl[0].ID != job.ID {
 		t.Errorf("expected exactly this job in dead_letter list, got %d entries", len(dl))
+	}
+}
+
+// getTestStoreWithClock creates a PgStore with an injected clock for deterministic testing.
+func getTestStoreWithClock(t *testing.T, clk clock.Clock) (*PgStore, func()) {
+	t.Helper()
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://postgres:secret@localhost:5432/forge?sslmode=disable"
+	}
+
+	store, err := NewPgStore(dbURL, WithClock(clk))
+	if err != nil {
+		t.Skipf("Skipping store integration test: database connection failed: %v", err)
+	}
+
+	_, err = store.DB().Exec("TRUNCATE TABLE jobs CASCADE; TRUNCATE TABLE workers CASCADE;")
+	if err != nil {
+		t.Fatalf("Failed to truncate tables: %v", err)
+	}
+
+	cleanup := func() {
+		_, _ = store.DB().Exec("TRUNCATE TABLE jobs CASCADE; TRUNCATE TABLE workers CASCADE;")
+		store.Close()
+	}
+
+	return store, cleanup
+}
+
+// TestBackoffGatesReclaim proves U5: a failed job's retry is gated by run_at,
+// and the backoff+jitter window is bounded. The test advances a ManualClock
+// to just before/at run_at and asserts claimability flips exactly at run_at.
+func TestBackoffGatesReclaim(t *testing.T) {
+	clk := clock.NewManualClock(time.Unix(1700000000, 0))
+	s, cleanup := getTestStoreWithClock(t, clk)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Create and fail once to trigger requeue with backoff
+	job, err := s.CreateJob(ctx, "test-task", nil, 0, "")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	claimed, err := s.ClaimJob(ctx, "wrk-a", time.Minute)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := s.StartJob(ctx, job.ID, claimed.LeaseEpoch); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := s.FailJob(ctx, job.ID, claimed.LeaseEpoch, "boom"); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+
+	// After one failure, the job should be pending with run_at = now + backoff(1) + jitter
+	// backoff(1) = backoffBase = 2s. jitter is in [0, backoffBase].
+	// So run_at ∈ [now+2s, now+4s].
+	backoff1 := backoffBase // 2s
+	minRunAt := clk.Now().Add(backoff1)
+	maxRunAt := clk.Now().Add(backoff1 + backoffBase)
+
+	failedJob, err := s.GetJob(ctx, job.ID)
+	if err != nil || failedJob.RunAt == nil {
+		t.Fatalf("get scheduled retry: job=%v err=%v", failedJob, err)
+	}
+	runAt := *failedJob.RunAt
+	if runAt.Before(minRunAt) || runAt.After(maxRunAt) {
+		t.Fatalf("run_at=%v out of bounds [%v, %v]", runAt, minRunAt, maxRunAt)
+	}
+
+	// Advance just before the actual run_at — job must NOT be claimable.
+	clk.Advance(runAt.Sub(clk.Now()) - time.Nanosecond)
+	if stolen, err := s.ClaimJob(ctx, "wrk-b", time.Minute); err != nil || stolen != nil {
+		t.Errorf("before run_at: job should not be claimable, got job=%v err=%v", stolen, err)
+	}
+
+	// Advance to exactly run_at — claimability flips at the gate.
+	clk.Advance(time.Nanosecond)
+	claimed2, err := s.ClaimJob(ctx, "wrk-b", time.Minute)
+	if err != nil || claimed2 == nil || claimed2.ID != job.ID {
+		t.Fatalf("at run_at: expected to reclaim, got job=%v err=%v", claimed2, err)
+	}
+	if claimed2.AttemptCount != 2 {
+		t.Errorf("expected attempt_count=2 after one failure and retry claim, got %d", claimed2.AttemptCount)
+	}
+	if claimed2.LeaseEpoch != claimed.LeaseEpoch+2 {
+		t.Errorf("expected epoch=%d, got %d", claimed.LeaseEpoch+2, claimed2.LeaseEpoch)
+	}
+}
+
+// TestLeaseExpiryManualClock rewrites the original lease-expiry test to use
+// ManualClock instead of a raw SQL UPDATE with now() - interval.
+func TestLeaseExpiryManualClock(t *testing.T) {
+	clk := clock.NewManualClock(time.Unix(1700000000, 0))
+	s, cleanup := getTestStoreWithClock(t, clk)
+	defer cleanup()
+	ctx := context.Background()
+
+	job, err := s.CreateJob(ctx, "test-task", nil, 0, "")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	claimedA, err := s.ClaimJob(ctx, "wrk-a", 2*time.Minute)
+	if err != nil || claimedA == nil {
+		t.Fatalf("claim A: %v", err)
+	}
+	epochA := claimedA.LeaseEpoch
+	if err := s.StartJob(ctx, job.ID, epochA); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+
+	// Fast-forward the clock past the lease expiry (2 minutes)
+	clk.Advance(2*time.Minute + time.Second)
+
+	// Worker B should now be able to reclaim the expired running job
+	claimedB, err := s.ClaimJob(ctx, "wrk-b", 2*time.Minute)
+	if err != nil {
+		t.Fatalf("claim B: %v", err)
+	}
+	if claimedB == nil {
+		t.Fatal("expected B to reclaim the expired running job")
+	}
+	if claimedB.ID != job.ID {
+		t.Fatalf("expected B to reclaim the same job, got %v", claimedB.ID)
+	}
+	if claimedB.LeaseEpoch != epochA+1 {
+		t.Errorf("expected reclaim to bump lease_epoch to %d, got %d", epochA+1, claimedB.LeaseEpoch)
+	}
+
+	// B starts the reclaimed job
+	if err := s.StartJob(ctx, job.ID, claimedB.LeaseEpoch); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+
+	// A tries to complete with stale epoch — should be fenced
+	if err := s.CompleteJob(ctx, job.ID, epochA); !errors.Is(err, ErrFenced) {
+		t.Fatalf("expected ErrFenced from deposed worker's CompleteJob, got %v", err)
+	}
+
+	// B completes legitimately
+	if err := s.CompleteJob(ctx, job.ID, claimedB.LeaseEpoch); err != nil {
+		t.Fatalf("expected B to complete: %v", err)
+	}
+	final, err := s.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("get final: %v", err)
+	}
+	if final.Status != StatusCompleted {
+		t.Errorf("expected final status completed, got %s", final.Status)
 	}
 }

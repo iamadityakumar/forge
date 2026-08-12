@@ -28,7 +28,7 @@
 | U7 | **Invariant-based chaos test under `-race`** | A kill script that you eyeball | Property/invariant testing of probabilistic systems | 🟢 W3 (stretch) |
 | U8 | **Distributed tracing (OpenTelemetry)** | Prometheus counters only | Cross-worker spans; real observability | W4–W6 |
 | U9 | **Cost-aware rate limiting by estimated token spend** | Flat QPS limiting at the request boundary | Modeling real capacity (provider token budgets) | W5 |
-| U10 | **Deterministic-time simulation (fake clock + fake LLM)** | `time.Sleep` in tests → flake | How Temporal/Redis test themselves | W7 |
+| U10 | **Deterministic-time simulation (fake clock + fake LLM)** ✅ | `time.Sleep` in tests → flake | How Temporal/Redis test themselves | 🟢 **W7** |
 
 **Also:** partial indexes on the claim query (smaller + faster, a real senior
 touch), `run_at` enabling scheduled/delayed jobs for free, a
@@ -283,13 +283,30 @@ spend against the provider's real budget — not by request count."
 
 ---
 
-## U10 — Deterministic-time simulation testing
+## U10 — Deterministic-time simulation testing ✅ **DELIVERED (Week 7)**
 
 Real `time.Sleep` in tests means your suite takes minutes and flakes when CI is
 loaded. Inject a `Clock` interface and a `FakeLlm` backend so tests can fast-forward
 the clock and **deterministically reproduce** the lease-expiry-while-alive race, the
 fencing-token race, and backoff timing — in milliseconds, with no sleeps, no flake.
 This is how Temporal and Redis test their own time-dependent correctness.
+
+**Delivered artifacts:**
+- `internal/clock/` — `Clock` interface with `Now/After/NewTicker/Sleep`, `SystemClock`, `ManualClock` with min-heap event queue
+- `internal/ratelimit/clock.go` — zero-breakage aliases
+- `internal/store/` — `PgStore` takes `clock.Clock`, all SQL `now()` → `$now` bind
+- `internal/worker/` + `internal/agent/` — virtual timers via injected clock
+- `internal/llm/fake.go` — `Script()/Delay()/StepCalls()` deterministic fake
+- `internal/sim/` — harness + three named race tests (all green under `-race -count=10`)
+- `internal/sim/sim_test.go` — `TestSim_LeaseExpiryWhileAlive`, `TestSim_FencingTokenRace`, `TestSim_BackoffTiming`
+- `internal/store/postgres_test.go` — `TestBackoffGatesReclaim`, `TestLeaseExpiryManualClock`
+
+**Verification:**
+```bash
+go test -race -count=10 ./internal/sim/...   # < 5s, 10× identical output
+go test -race -count=5 ./internal/worker/... # chaos + sim, 5× green
+go test -race ./internal/store/...            # deterministic backoff/lease tests
+```
 
 **Interview concept:** senior testing discipline — the difference between "tests that
 sometimes pass" and "tests that prove a property."
@@ -306,7 +323,7 @@ sometimes pass" and "tests that prove a property."
   scaffold from U4 — each tool call *is* a resumable, fenced step.
 - **Week 5:** U9 turns the textbook limiter into a cost-aware one.
 - **Week 6:** U8 adds traces alongside the Prometheus dashboard.
-- **Week 7:** U10 replaces `time.Sleep` tests with deterministic simulation; U7's
+- **Week 7:** U10 replaces `time.Sleep` tests with deterministic simulation ✅; U7's
   chaos test runs in CI under `-race`.
 
 ---
