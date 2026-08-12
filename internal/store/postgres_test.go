@@ -4,21 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"forge/internal/testutil"
 )
 
 func getTestStore(t *testing.T) (*PgStore, func()) {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		// Fallback to local docker compose postgres for convenience during local runs
-		dbURL = "postgres://postgres:secret@localhost:5432/forge?sslmode=disable"
-	}
+	// Integration tests run against a dedicated per-package test database
+	// (forge_test_store), created and migrated on demand, so they never share —
+	// or truncate — the live `forge` database that the running worker stack uses.
+	dbURL := testutil.PrepareTestDB(t, "store")
 
 	store, err := NewPgStore(dbURL)
 	if err != nil {

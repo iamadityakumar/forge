@@ -3,24 +3,24 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"testing"
 	"time"
 
 	"forge/internal/llm"
 	"forge/internal/store"
+	"forge/internal/testutil"
 	"forge/internal/tools"
 )
 
-// getTestAgentStore opens a real PgStore and truncates the jobs/workers tables,
-// skipping the test when no database is reachable (same gating as the store
-// package's integration tests). Local runs default to docker compose postgres.
+// getTestAgentStore opens a real PgStore on the dedicated per-package test
+// database (forge_test_agent) and truncates the jobs/workers tables, skipping
+// the test when no database is reachable (same gating as the store package's
+// integration tests).
 func getTestAgentStore(t *testing.T) (*store.PgStore, func()) {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://postgres:secret@localhost:5432/forge?sslmode=disable"
-	}
+	// Dedicated per-package test database (forge_test_agent): the agent smoke
+	// test must not race live workers on the shared `forge` database.
+	dbURL := testutil.PrepareTestDB(t, "agent")
 
 	s, err := store.NewPgStore(dbURL)
 	if err != nil {

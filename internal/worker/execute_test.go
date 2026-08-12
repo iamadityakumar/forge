@@ -4,25 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	"forge/internal/store"
+	"forge/internal/testutil"
 )
 
-// newTestStoreTB opens the shared Postgres (DATABASE_URL, defaulting to the
-// docker-compose instance) and truncates the job tables. Worker integration
-// tests share the `forge` database with internal/store tests; because each
-// test binary truncates before/after, tests within a package are safe. To run
-// store and worker packages together without interference use `go test -p 1`
-// (CI runners can equivalently give each package its own database).
+// newTestStoreTB opens a dedicated per-package test database (forge_test_worker,
+// created and migrated on demand by testutil.PrepareTestDB) and truncates the
+// job tables. Each package's tests get their own database, so worker tests
+// never race the store/agent suites or the live worker stack on `forge`.
 func newTestStoreTB(t *testing.T) (*store.PgStore, func()) {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://postgres:secret@localhost:5432/forge?sslmode=disable"
-	}
+	dbURL := testutil.PrepareTestDB(t, "worker")
 	s, err := store.NewPgStore(dbURL)
 	if err != nil {
 		t.Skipf("skipping worker integration test: db connect failed: %v", err)
@@ -182,7 +177,7 @@ func TestRecordStep_FencedAfterDepose(t *testing.T) {
 }
 
 type mockHandler struct {
-	called bool
+	called      bool
 	gotWorkerID string
 }
 
