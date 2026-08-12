@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"forge/internal/clock"
 	"forge/internal/store"
 )
 
@@ -71,6 +72,10 @@ var (
 type segmentHandler struct{}
 
 func (segmentHandler) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch int, workerID string) error {
+	return segmentHandler{}.RunWithClock(ctx, s, job, epoch, workerID, clock.SystemClock{})
+}
+
+func (segmentHandler) RunWithClock(ctx context.Context, s store.JobStore, job *store.Job, epoch int, workerID string, clk clock.Clock) error {
 	segments := decodeSegmentCount(job.Payload)
 	start, err := s.LastCompletedStep(ctx, job.ID)
 	if err != nil {
@@ -88,7 +93,7 @@ func (segmentHandler) Run(ctx context.Context, s store.JobStore, job *store.Job,
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		out, durMs, err := runSegment(ctx, job, i)
+		out, durMs, err := runSegmentWithClock(ctx, clk, job, i)
 		if err != nil {
 			return err
 		}
@@ -108,25 +113,22 @@ func (segmentHandler) Run(ctx context.Context, s store.JobStore, job *store.Job,
 	return nil
 }
 
-// runSegment simulates one unit of work. In Week 4 this becomes a real
-// plan/tool-call/observation step. Returns the segment's JSON output and its
-// measured duration in ms.
-func runSegment(ctx context.Context, _ *store.Job, n int) (json.RawMessage, int, error) {
-	// Bounded random simulated work; guarded so setting segmentMin==segmentMax
-	// (e.g. the chaos test pinning tiny work) doesn't trip rand.Intn(0).
+// runSegmentWithClock simulates one unit of work using the injected clock.
+func runSegmentWithClock(ctx context.Context, clk clock.Clock, _ *store.Job, n int) (json.RawMessage, int, error) {
 	span := segmentMaxMs - segmentMinMs
 	d := time.Duration(segmentMinMs) * time.Millisecond
 	if span > 0 {
 		d = time.Duration(segmentMinMs+rand.Intn(span)) * time.Millisecond
 	}
-	t0 := time.Now()
-	select {
-	case <-time.After(d):
-	case <-ctx.Done():
-		return nil, 0, ctx.Err()
-	}
+	t0 := clk.Now()
+	clk.Sleep(d)
 	out, _ := json.Marshal(map[string]any{"step": n, "segment_ms": d.Milliseconds()})
-	return out, int(time.Since(t0).Milliseconds()), nil
+	return out, int(clk.Now().Sub(t0).Milliseconds()), nil
+}
+
+// runSegment simulates one unit of work using the system clock (for production/legacy).
+func runSegment(ctx context.Context, _ *store.Job, n int) (json.RawMessage, int, error) {
+	return runSegmentWithClock(ctx, clock.SystemClock{}, nil, n)
 }
 
 // decodeSegmentCount reads {"segments": N} from the job payload, defaulting to

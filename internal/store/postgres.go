@@ -1,4 +1,4 @@
-﻿package store
+package store
 
 import (
 	"context"
@@ -12,13 +12,16 @@ import (
 
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"forge/internal/clock"
 )
 
 type PgStore struct {
-	db *sql.DB
+	db  *sql.DB
+	clk clock.Clock
 }
 
-func NewPgStore(databaseURL string) (*PgStore, error) {
+func NewPgStore(databaseURL string, opts ...func(*PgStore)) (*PgStore, error) {
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
@@ -31,10 +34,14 @@ func NewPgStore(databaseURL string) (*PgStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
-	return &PgStore{db: db}, nil
+	s := &PgStore{db: db, clk: clock.SystemClock{}}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
-func (s *PgStore) DB() *sql.DB { return s.db }
+func (s *PgStore) DB() *sql.DB  { return s.db }
 func (s *PgStore) Close() error { return s.db.Close() }
 func (s *PgStore) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
@@ -191,19 +198,21 @@ func (s *PgStore) scanJobs(ctx context.Context, query string, args ...any) ([]Jo
 }
 
 func (s *PgStore) ClaimJob(ctx context.Context, workerID string, leaseDuration time.Duration) (*Job, error) {
+	now := s.clk.Now()
+	expiresAt := now.Add(leaseDuration)
 	query := `
 		UPDATE jobs
 		SET status           = 'claimed',
 		    claimed_by       = $1,
-		    lease_expires_at = now() + $2::interval,
+		    lease_expires_at = $3,
 		    lease_epoch      = lease_epoch + 1,
 		    attempt_count    = attempt_count + 1,
 		    run_at           = NULL
 		WHERE id = (
 			SELECT id FROM jobs
 			WHERE (status = 'pending'
-			       OR (status IN ('claimed','running') AND lease_expires_at < now()))
-			  AND (run_at IS NULL OR run_at <= now())
+			       OR (status IN ('claimed','running') AND lease_expires_at < $2))
+			  AND (run_at IS NULL OR run_at <= $2)
 			ORDER BY priority DESC, created_at ASC
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
@@ -213,11 +222,9 @@ func (s *PgStore) ClaimJob(ctx context.Context, workerID string, leaseDuration t
 		          error_message, created_at, lease_epoch, run_at, completed_at, dead_letter, trace_context
 	`
 
-	interval := fmt.Sprintf("%d milliseconds", leaseDuration.Milliseconds())
-
 	var job Job
 	var tc []byte
-	err := s.db.QueryRowContext(ctx, query, workerID, interval).Scan(
+	err := s.db.QueryRowContext(ctx, query, workerID, now, expiresAt).Scan(
 		&job.ID, &job.TaskType, &job.Payload, &job.Status,
 		&job.Priority, &job.IdempotencyKey, &job.ClaimedBy,
 		&job.LeaseExpiresAt, &job.AttemptCount, &job.MaxAttempts,
@@ -250,10 +257,11 @@ func (s *PgStore) StartJob(ctx context.Context, jobID uuid.UUID, epoch int) erro
 }
 
 func (s *PgStore) CompleteJob(ctx context.Context, jobID uuid.UUID, epoch int) error {
+	now := s.clk.Now()
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE jobs SET status = 'completed', completed_at = now()
+		`UPDATE jobs SET status = 'completed', completed_at = $3
 		 WHERE id = $1 AND status = 'running' AND lease_epoch = $2`,
-		jobID, epoch,
+		jobID, epoch, now,
 	)
 	if err != nil {
 		return fmt.Errorf("complete job: %w", err)
@@ -265,8 +273,8 @@ func (s *PgStore) CompleteJob(ctx context.Context, jobID uuid.UUID, epoch int) e
 }
 
 var (
-	backoffBase   = 2 * time.Second
-	backoffCap    = 5 * time.Minute
+	backoffBase                        = 2 * time.Second
+	backoffCap                         = 5 * time.Minute
 	backoffJitter func() time.Duration = defaultBackoffJitter
 )
 
@@ -310,14 +318,15 @@ func (s *PgStore) FailJob(ctx context.Context, jobID uuid.UUID, epoch int, reaso
 		return fmt.Errorf("fail job (read): %w", err)
 	}
 
+	now := s.clk.Now()
 	if attemptCount >= maxAttempts {
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE jobs
-			    SET status = 'failed', dead_letter = true, completed_at = now(),
+			    SET status = 'failed', dead_letter = true, completed_at = $4,
 			        error_message = $3, claimed_by = NULL, lease_expires_at = NULL,
 			        run_at = NULL
 			  WHERE id = $1 AND lease_epoch = $2 AND status = 'running'`,
-			jobID, epoch, reason,
+			jobID, epoch, reason, now,
 		)
 		if err != nil {
 			return fmt.Errorf("fail job (dead-letter): %w", err)
@@ -329,13 +338,14 @@ func (s *PgStore) FailJob(ctx context.Context, jobID uuid.UUID, epoch int, reaso
 	}
 
 	delay := computeBackoff(attemptCount)
+	runAt := now.Add(delay)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE jobs
 		    SET status = 'pending', claimed_by = NULL, lease_expires_at = NULL,
-		        run_at = now() + $3::interval, error_message = $4,
+		        run_at = $4, error_message = $3,
 		        lease_epoch = lease_epoch + 1
 		  WHERE id = $1 AND lease_epoch = $2 AND status = 'running'`,
-		jobID, epoch, fmt.Sprintf("%d milliseconds", delay.Milliseconds()), reason,
+		jobID, epoch, reason, runAt,
 	)
 	if err != nil {
 		return fmt.Errorf("fail job (requeue): %w", err)
@@ -419,10 +429,12 @@ func (s *PgStore) ListSteps(ctx context.Context, jobID uuid.UUID) ([]JobStep, er
 }
 
 func (s *PgStore) RenewLease(ctx context.Context, jobID uuid.UUID, epoch int, lease time.Duration) error {
+	now := s.clk.Now()
+	expiresAt := now.Add(lease)
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE jobs SET lease_expires_at = now() + $2::interval
-		 WHERE id = $1 AND lease_epoch = $3 AND status IN ('claimed','running')`,
-		jobID, fmt.Sprintf("%d milliseconds", lease.Milliseconds()), epoch,
+		`UPDATE jobs SET lease_expires_at = $3
+		 WHERE id = $1 AND lease_epoch = $2 AND status IN ('claimed','running')`,
+		jobID, epoch, expiresAt,
 	)
 	if err != nil {
 		return fmt.Errorf("renew lease: %w", err)
@@ -434,12 +446,13 @@ func (s *PgStore) RenewLease(ctx context.Context, jobID uuid.UUID, epoch int, le
 }
 
 func (s *PgStore) Heartbeat(ctx context.Context, workerID string, hostname string) error {
+	now := s.clk.Now()
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO workers (id, hostname, last_heartbeat, status)
-		 VALUES ($1, $2, now(), 'active')
+		 VALUES ($1, $2, $3, 'active')
 		 ON CONFLICT (id) DO UPDATE
-		 SET last_heartbeat = now(), hostname = $2`,
-		workerID, hostname,
+		 SET last_heartbeat = $3, hostname = $2`,
+		workerID, hostname, now,
 	)
 	if err != nil {
 		return fmt.Errorf("heartbeat: %w", err)
@@ -451,10 +464,11 @@ func (s *PgStore) CountActiveWorkers(ctx context.Context, within time.Duration) 
 	if within <= 0 {
 		within = 30 * time.Second
 	}
+	now := s.clk.Now()
 	interval := fmt.Sprintf("%d milliseconds", within.Milliseconds())
-	query := `SELECT COUNT(*) FROM workers WHERE last_heartbeat > now() - $1::interval`
+	query := `SELECT COUNT(*) FROM workers WHERE last_heartbeat > $2 - $1::interval`
 	var count int
-	err := s.db.QueryRowContext(ctx, query, interval).Scan(&count)
+	err := s.db.QueryRowContext(ctx, query, interval, now).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count active workers: %w", err)
 	}

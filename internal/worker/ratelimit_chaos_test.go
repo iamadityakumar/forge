@@ -1,13 +1,14 @@
 ﻿package worker
 
 import (
-	"forge/internal/metrics"
 	"context"
 	"fmt"
 	"testing"
 	"time"
 
+	"forge/internal/clock"
 	"forge/internal/llm"
+	"forge/internal/metrics"
 	"forge/internal/ratelimit"
 	"forge/internal/store"
 )
@@ -22,7 +23,7 @@ func TestRateLimitedAgent_StillExactlyOnce(t *testing.T) {
 		segmentMinMs, segmentMaxMs = oldMin, oldMax
 	}()
 
-	s := newChaosStore()
+	s := newChaosStore(clock.SystemClock{})
 	numJobs := 10
 	segmentsPerJob := 5
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"forge/internal/clock"
 	"forge/internal/store"
 )
 
@@ -54,6 +55,7 @@ type chaosStore struct {
 	execCount map[stepKey]int            // the exactly-once oracle: committed-step count
 
 	claimCursor []uuid.UUID // iteration order for deterministic "next claimable" selection
+	clk         clock.Clock
 }
 
 type stepKey struct {
@@ -65,15 +67,16 @@ type chaosJob struct {
 	store.Job
 }
 
-func newChaosStore() *chaosStore {
+func newChaosStore(clk clock.Clock) *chaosStore {
 	return &chaosStore{
 		jobs:      make(map[uuid.UUID]*chaosJob),
 		steps:     make(map[stepKey]*store.JobStep),
 		execCount: make(map[stepKey]int),
+		clk:       clk,
 	}
 }
 
-func (s *chaosStore) now() time.Time { return time.Now() }
+func (s *chaosStore) now() time.Time { return s.clk.Now() }
 
 func (s *chaosStore) CreateJob(_ context.Context, taskType string, payload json.RawMessage, priority int, idempotencyKey string) (store.Job, error) {
 	s.mu.Lock()
@@ -434,7 +437,8 @@ func chaosBackoff(attempts int) time.Duration {
 // most important assertion in the repo: under repeated kills, exactly-once
 // step execution and liveness both hold.
 func TestChaosRecoveryKillsExactlyOnce(t *testing.T) {
-	fs := newChaosStore()
+	clk := clock.SystemClock{}
+	fs := newChaosStore(clk)
 
 	// Segment work is sized so a job clearly outlives one lease window (this
 	// exercises lease renewal *and* leaves jobs genuinely in-flight when the
