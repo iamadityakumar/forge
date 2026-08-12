@@ -13,6 +13,7 @@ import (
 
 	"forge/internal/api"
 	forgelog "forge/internal/log"
+	"forge/internal/clock"
 	"forge/internal/metrics"
 	"forge/internal/store"
 	"forge/internal/trace"
@@ -37,7 +38,7 @@ func main() {
 		slog.Info("DATABASE_URL not set or set to memory; initializing in-memory demo store")
 		jobStore = store.NewMemStore()
 	} else {
-		pgStore, err := store.NewPgStore(dbURL)
+		pgStore, err := store.NewPgStore(dbURL, store.WithClock(clock.SystemClock{}))
 		if err != nil {
 			slog.Warn("failed to connect to postgresql database, falling back to in-memory demo store", "error", err)
 			jobStore = store.NewMemStore()

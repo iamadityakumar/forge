@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 
+	"forge/internal/clock"
 	"forge/internal/llm"
 	"forge/internal/metrics"
 	"forge/internal/store"
@@ -28,14 +28,22 @@ type Agent struct {
 	maxSteps   int
 	systemProm string
 	metrics    *metrics.Metrics
+	clk        clock.Clock
 }
 
 func New(backend llm.LLMBackend, registry *tools.Registry, m *metrics.Metrics) *Agent {
+	return NewWithClock(backend, registry, m, clock.SystemClock{})
+}
+
+func NewWithClock(backend llm.LLMBackend, registry *tools.Registry, m *metrics.Metrics, clk clock.Clock) *Agent {
 	maxSteps := 10
 	if envVal := os.Getenv("AGENT_MAX_STEPS"); envVal != "" {
 		if ms, err := strconv.Atoi(envVal); err == nil && ms > 0 {
 			maxSteps = ms
 		}
+	}
+	if clk == nil {
+		clk = clock.SystemClock{}
 	}
 
 	return &Agent{
@@ -44,14 +52,15 @@ func New(backend llm.LLMBackend, registry *tools.Registry, m *metrics.Metrics) *
 		maxSteps:   maxSteps,
 		systemProm: buildSystemPrompt(registry),
 		metrics:    m,
+		clk:        clk,
 	}
 }
 
 func (a *Agent) completeAndRecord(ctx context.Context, s store.JobStore, jobID uuid.UUID, workerID string, req llm.CompleteRequest) (llm.CompleteResponse, error) {
 	est := llm.EstimateTokens(req)
-	t0 := time.Now()
+	t0 := a.clk.Now()
 	resp, err := a.backend.Complete(ctx, req)
-	latency := int(time.Since(t0).Milliseconds())
+	latency := int(a.clk.Now().Sub(t0).Milliseconds())
 
 	call := store.LLMCall{
 		JobID:           jobID,
@@ -108,7 +117,7 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 			trace.Attribute{Key: "step_number", Value: currentStepNum + 1},
 			trace.Attribute{Key: "worker_id", Value: workerID},
 		)
-		toolStart := time.Now()
+		toolStart := a.clk.Now()
 		toolOutput := executeToolCall(stepCtx, a.registry, pendingDecision)
 		currentStepNum++
 		if _, err := s.RecordStep(stepCtx, job.ID, epoch, store.JobStep{
@@ -122,7 +131,7 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 			toolSpan.End()
 			return fmt.Errorf("record pending tool_call step %d: %w", currentStepNum, err)
 		}
-		toolDur := time.Since(toolStart)
+		toolDur := a.clk.Now().Sub(toolStart)
 		toolSpan.End()
 
 		if a.metrics != nil {
@@ -145,7 +154,7 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 			trace.Attribute{Key: "worker_id", Value: workerID},
 		)
 
-		planStart := time.Now()
+		planStart := a.clk.Now()
 		resp, err := a.completeAndRecord(planCtx, s, job.ID, workerID, llm.CompleteRequest{
 			Messages: messages,
 			JSON:     true,
@@ -192,7 +201,7 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 			planSpan.End()
 			return fmt.Errorf("record plan step %d: %w", currentStepNum, err)
 		}
-		planDur := time.Since(planStart)
+		planDur := a.clk.Now().Sub(planStart)
 		planSpan.End()
 
 		if a.metrics != nil {
@@ -215,7 +224,7 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 			trace.Attribute{Key: "step_number", Value: currentStepNum + 1},
 			trace.Attribute{Key: "worker_id", Value: workerID},
 		)
-		toolStart := time.Now()
+		toolStart := a.clk.Now()
 		toolOutput := executeToolCall(toolCtx, a.registry, decision)
 		currentStepNum++
 		if _, err := s.RecordStep(toolCtx, job.ID, epoch, store.JobStep{
@@ -229,7 +238,7 @@ func (a *Agent) Run(ctx context.Context, s store.JobStore, job *store.Job, epoch
 			toolSpan.End()
 			return fmt.Errorf("record tool_call step %d: %w", currentStepNum, err)
 		}
-		toolDur := time.Since(toolStart)
+		toolDur := a.clk.Now().Sub(toolStart)
 		toolSpan.End()
 
 		if a.metrics != nil {

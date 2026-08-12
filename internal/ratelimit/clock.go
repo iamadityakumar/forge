@@ -1,32 +1,21 @@
-﻿package ratelimit
+package ratelimit
 
-import "time"
+import (
+	"time"
 
-// Clock abstracts time for deterministic testing of rate limiters.
-type Clock interface {
-	Now() time.Time
-}
+	"forge/internal/clock"
+)
 
-// SystemClock delegates to time.Now().
-type SystemClock struct{}
+// Clock is an alias for the shared clock abstraction.
+type Clock = clock.Clock
 
-func (SystemClock) Now() time.Time {
-	return time.Now()
-}
+// SystemClock is an alias for the system clock implementation.
+type SystemClock = clock.SystemClock
 
-// ManualClock is a thread-safe mock clock for unit tests.
-type ManualClock struct {
-	now time.Time
-}
+// ManualClock is an alias for the manual clock implementation.
+type ManualClock = clock.ManualClock
 
+// NewManualClock creates a ManualClock via the shared package.
 func NewManualClock(t time.Time) *ManualClock {
-	return &ManualClock{now: t}
-}
-
-func (m *ManualClock) Now() time.Time {
-	return m.now
-}
-
-func (m *ManualClock) Advance(d time.Duration) {
-	m.now = m.now.Add(d)
+	return clock.NewManualClock(t)
 }

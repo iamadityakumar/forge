@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"forge/internal/agent"
+	"forge/internal/clock"
 	"forge/internal/llm"
 	"forge/internal/metrics"
 	"forge/internal/ratelimit"
@@ -38,7 +39,8 @@ func main() {
 	}
 
 	// Open Postgres connection pool.
-	pgStore, err := store.NewPgStore(dbURL)
+	systemClock := clock.SystemClock{}
+	pgStore, err := store.NewPgStore(dbURL, store.WithClock(systemClock))
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
