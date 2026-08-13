@@ -347,7 +347,11 @@ func (h *Handler) healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pendingJobs, _ := h.store.CountPendingJobs(r.Context())
-	workersOnline, _ := h.store.CountActiveWorkers(r.Context(), 30*time.Second)
+	workersOnline, err := h.store.CountActiveWorkers(r.Context(), 30*time.Second)
+	if err != nil {
+		slog.Error("count active workers failed", "error", err)
+		workersOnline = 0
+	}
 
 	overallStatus := "ok"
 	if dbStatus != "ok" || workersOnline == 0 {

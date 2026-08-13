@@ -466,7 +466,7 @@ func (s *PgStore) CountActiveWorkers(ctx context.Context, within time.Duration) 
 	}
 	now := s.clk.Now()
 	interval := fmt.Sprintf("%d milliseconds", within.Milliseconds())
-	query := `SELECT COUNT(*) FROM workers WHERE last_heartbeat > $2 - $1::interval`
+	query := `SELECT COUNT(*) FROM workers WHERE last_heartbeat > $2::timestamptz - $1::interval`
 	var count int
 	err := s.db.QueryRowContext(ctx, query, interval, now).Scan(&count)
 	if err != nil {
