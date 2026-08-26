@@ -1,4 +1,4 @@
-﻿package llm
+package llm
 
 import (
 	"bytes"
@@ -113,8 +113,36 @@ func (g *GroqBackend) Complete(ctx context.Context, req CompleteRequest) (Comple
 			if ra := resp.Header.Get("Retry-After"); ra != "" {
 				if secs, err := strconv.Atoi(ra); err == nil && secs > 0 {
 					retryAfter = time.Duration(secs) * time.Second
+				} else if fsecs, err := strconv.ParseFloat(ra, 64); err == nil && fsecs > 0 {
+					retryAfter = time.Duration(fsecs * float64(time.Second))
 				}
 			}
+
+			if retryAfter == 0 && resp.StatusCode == 429 {
+				var errResp struct {
+					Error struct {
+						Message string `json:"message"`
+					} `json:"error"`
+				}
+				if err := json.Unmarshal(respBody, &errResp); err == nil {
+					msg := errResp.Error.Message
+					if idx := strings.Index(msg, "try again in "); idx >= 0 {
+						sub := msg[idx+len("try again in "):]
+						if idx2 := strings.Index(sub, "ms."); idx2 >= 0 {
+							val := sub[:idx2]
+							if fms, err := strconv.ParseFloat(val, 64); err == nil && fms > 0 {
+								retryAfter = time.Duration(fms * float64(time.Millisecond))
+							}
+						} else if idx2 := strings.Index(sub, "s."); idx2 >= 0 {
+							val := sub[:idx2]
+							if fsecs, err := strconv.ParseFloat(val, 64); err == nil && fsecs > 0 {
+								retryAfter = time.Duration(fsecs * float64(time.Second))
+							}
+						}
+					}
+				}
+			}
+
 			return CompleteResponse{}, &HTTPError{
 				StatusCode: resp.StatusCode,
 				Status:     resp.Status,

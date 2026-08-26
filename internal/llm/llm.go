@@ -64,6 +64,9 @@ func isTransientErr(err error) (bool, time.Duration) {
 		if httpErr.StatusCode == 429 || httpErr.StatusCode >= 500 {
 			return true, httpErr.RetryAfter
 		}
+		if httpErr.StatusCode == 400 && strings.Contains(httpErr.Body, "json_validate_failed") {
+			return true, 0
+		}
 		return false, 0
 	}
 
@@ -97,7 +100,9 @@ func computeBackoff(attempt int) time.Duration {
 
 func retryTransient(ctx context.Context, maxRetries int, do func() (CompleteResponse, error)) (CompleteResponse, error) {
 	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	normalRetries := 0
+	attempt := 0 // for backoff
+	for {
 		if err := ctx.Err(); err != nil {
 			return CompleteResponse{}, err
 		}
@@ -109,11 +114,21 @@ func retryTransient(ctx context.Context, maxRetries int, do func() (CompleteResp
 
 		lastErr = err
 		transient, retryAfter := isTransientErr(err)
-		if !transient || attempt == maxRetries {
+
+		var httpErr *HTTPError
+		isRateLimit := errors.As(err, &httpErr) && httpErr.StatusCode == 429
+
+		if !transient || (!isRateLimit && normalRetries >= maxRetries) {
 			return CompleteResponse{}, err
 		}
 
+		if !isRateLimit {
+			normalRetries++
+		}
+
 		delay := computeBackoff(attempt)
+		attempt++
+		
 		if retryAfter > 0 {
 			delay = retryAfter
 		}
