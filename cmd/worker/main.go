@@ -165,7 +165,17 @@ func main() {
 	}
 
 	reg := tools.NewRegistry()
-	if err := reg.Register(tools.NewSearchKBTool()); err != nil {
+	embedding := llm.NewOllamaEmbeddingBackend(os.Getenv("OLLAMA_HOST"), os.Getenv("OLLAMA_EMBEDDING_MODEL"), nil)
+	embeddingHost := os.Getenv("OLLAMA_HOST")
+	if embeddingHost == "" {
+		embeddingHost = "http://localhost:11434"
+	}
+	embeddingModel := os.Getenv("OLLAMA_EMBEDDING_MODEL")
+	if embeddingModel == "" {
+		embeddingModel = "nomic-embed-text"
+	}
+	embedding = llm.NewOllamaEmbeddingBackend(embeddingHost, embeddingModel, nil)
+	if err := reg.Register(tools.NewVectorSearchKBTool(pgStore, embedding, metricsStore)); err != nil {
 		log.Fatalf("failed to register search_kb tool: %v", err)
 	}
 	if err := reg.Register(tools.NewRunTestsTool()); err != nil {

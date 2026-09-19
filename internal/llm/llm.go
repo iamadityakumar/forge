@@ -14,7 +14,7 @@ import (
 )
 
 type Message struct {
-	Role    string `json:"role"`    // system | user | assistant
+	Role    string `json:"role"` // system | user | assistant
 	Content string `json:"content"`
 }
 
@@ -128,7 +128,7 @@ func retryTransient(ctx context.Context, maxRetries int, do func() (CompleteResp
 
 		delay := computeBackoff(attempt)
 		attempt++
-		
+
 		if retryAfter > 0 {
 			delay = retryAfter
 		}
@@ -205,4 +205,11 @@ func NewFromEnv() (LLMBackend, error) {
 	default:
 		return nil, fmt.Errorf("unknown LLM_BACKEND %q (expected ollama|groq|fake)", backendName)
 	}
+}
+
+// EmbeddingBackend converts text into vectors suitable for semantic retrieval.
+type EmbeddingBackend interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+	Name() string
+	Dimensions() int
 }

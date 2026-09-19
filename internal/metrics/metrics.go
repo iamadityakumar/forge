@@ -22,15 +22,15 @@ type Metrics struct {
 	ActiveWorkers       prometheus.Gauge
 
 	// --- worker / agent layer ---
-	ClaimsTotal      prometheus.Counter
-	JobsCompleted    prometheus.Counter
-	JobsFailed       *prometheus.CounterVec   // {dead_letter}
-	JobDuration      prometheus.Histogram
-	LeaseExtensions  prometheus.Counter
-	InFlightJobs     prometheus.Gauge
-	StepsTotal       *prometheus.CounterVec   // {step_type}
-	StepDuration     *prometheus.HistogramVec // {step_type}
-	StepsResumed     prometheus.Counter
+	ClaimsTotal     prometheus.Counter
+	JobsCompleted   prometheus.Counter
+	JobsFailed      *prometheus.CounterVec // {dead_letter}
+	JobDuration     prometheus.Histogram
+	LeaseExtensions prometheus.Counter
+	InFlightJobs    prometheus.Gauge
+	StepsTotal      *prometheus.CounterVec   // {step_type}
+	StepDuration    *prometheus.HistogramVec // {step_type}
+	StepsResumed    prometheus.Counter
 
 	// --- LLM / rate-limit layer ---
 	LLMCalls          *prometheus.CounterVec   // {backend}
@@ -39,6 +39,7 @@ type Metrics struct {
 	LLMErrors         *prometheus.CounterVec   // {backend, kind}  kind = bounded error category
 	RateLimitWaits    *prometheus.CounterVec   // {limiter}
 	RateLimitWaitTime *prometheus.HistogramVec // {limiter}
+	RetrievalLatency  prometheus.Histogram
 }
 
 func New(namespace string) *Metrics {
@@ -187,6 +188,9 @@ func New(namespace string) *Metrics {
 		Help:      "Time spent waiting for rate limit by limiter.",
 		Buckets:   LatencyBuckets,
 	}, []string{"limiter"})
+	m.RetrievalLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: ns, Name: "retrieval_latency_seconds", Help: "Knowledge-base retrieval latency in seconds.", Buckets: LatencyBuckets,
+	})
 
 	// Register all metrics with the custom registry
 	reg.MustRegister(
@@ -211,6 +215,7 @@ func New(namespace string) *Metrics {
 		m.LLMErrors,
 		m.RateLimitWaits,
 		m.RateLimitWaitTime,
+		m.RetrievalLatency,
 	)
 
 	return m

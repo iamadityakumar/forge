@@ -275,6 +275,45 @@ go test -v ./internal/worker/ -run TestChaos
 
 ---
 
+## 🔎 RAG Evaluation & Benchmarking
+
+The retrieval implementation and its remaining measurement work are tracked
+in [`ragplan.md`](ragplan.md). The evaluation dataset is deliberately small,
+reviewable, and executable rather than generated from unverified model output.
+
+```bash
+# Start PostgreSQL with pgvector, apply migrations, and ingest the KB.
+docker compose up -d postgres
+go run ./cmd/ingest -dir internal/tools/kb
+
+# Run the retrieval/task evaluation and write a JSON artifact.
+go run ./cmd/rag-eval --output eval-results.json
+
+# Benchmark local Ollama models. Retrieval context is supplied explicitly.
+python scripts/rag_benchmark.py --models llama3.1 qwen2.5:3b \
+  --retrieval "Prefix sums answer static range sums in O(1) after O(N) preprocessing." \
+  --output rag-benchmark.json
+```
+
+Recall@k counts a query as recovered when its labeled source appears in the
+first k results; MRR is the reciprocal rank of the first relevant source.
+Pass rate is the fraction of dataset programs whose supplied tests pass.
+The benchmark writes measured latency and token fields only after Ollama is
+available. Model pass rate remains `null` in this generic chat runner because
+it does not pretend that arbitrary prose is executable code; use the dataset
+runner for executable task pass rate. The repository does not invent
+performance numbers.
+
+Measured Groq run: `qwen/qwen3.8-27b`, two runs per condition, 256-token cap,
+and 12-second request spacing. Without retrieval, p50 latency was `0.775s`
+and mean throughput `330.5 tokens/s`. With retrieval, p50 latency was
+`0.761s` and mean throughput `336.8 tokens/s`. Pass rate is not applicable to
+the generic prose prompt. Raw output is in
+`groq-qwen3.8-27b-rag-benchmark.json`; full status and remaining work are in
+[`ragplan.md`](ragplan.md).
+
+---
+
 ## 📁 Repository Structure
 
 ```

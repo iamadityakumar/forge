@@ -135,3 +135,11 @@ time.sleep(5)
 		t.Errorf("expected 'time limit exceeded' error, got: %s", output.Results[0].Error)
 	}
 }
+
+func TestSearchKBToolUsesLegacySearchWithoutVectorDependencies(t *testing.T) {
+	tool := NewSearchKBTool()
+	if tool.isVectorSearchEnabled() { t.Fatal("legacy tool unexpectedly has vector dependencies") }
+	result, err := tool.Execute(context.Background(), `{"query":"sliding"}`)
+	if err != nil { t.Fatal(err) }
+	if !strings.Contains(strings.ToLower(result), "sliding") { t.Fatalf("expected legacy result, got %q", result) }
+}

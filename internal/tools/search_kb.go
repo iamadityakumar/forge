@@ -7,15 +7,32 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+	"time"
+
+	"forge/internal/llm"
+	"forge/internal/metrics"
+	"forge/internal/store"
 )
 
 //go:embed kb/*.md
 var kbFS embed.FS
 
-type SearchKBTool struct{}
+type SearchKBTool struct {
+	store     *store.PgStore
+	embedding llm.EmbeddingBackend
+	metrics   *metrics.Metrics
+}
 
 func NewSearchKBTool() *SearchKBTool {
 	return &SearchKBTool{}
+}
+
+func NewVectorSearchKBTool(s *store.PgStore, embedding llm.EmbeddingBackend, m *metrics.Metrics) *SearchKBTool {
+	return &SearchKBTool{store: s, embedding: embedding, metrics: m}
+}
+
+func (s *SearchKBTool) isVectorSearchEnabled() bool {
+	return s.store != nil && s.embedding != nil
 }
 
 func (s *SearchKBTool) Name() string {
@@ -43,6 +60,28 @@ func (s *SearchKBTool) Execute(ctx context.Context, argsJSON string) (string, er
 	query := strings.ToLower(strings.TrimSpace(args.Query))
 	if query == "" {
 		return "Query is empty. Please provide a search keyword.", nil
+	}
+	if s.store != nil && s.embedding != nil {
+		started := time.Now()
+		vector, err := s.embedding.Embed(ctx, query)
+		if err != nil {
+			return "", fmt.Errorf("embed query: %w", err)
+		}
+		chunks, err := s.store.SearchKB(ctx, vector, 5)
+		if err != nil {
+			return "", err
+		}
+		if s.metrics != nil {
+			s.metrics.RetrievalLatency.Observe(time.Since(started).Seconds())
+		}
+		if len(chunks) == 0 {
+			return fmt.Sprintf("No knowledge base documents found matching query: %s", args.Query), nil
+		}
+		var results []string
+		for _, chunk := range chunks {
+			results = append(results, fmt.Sprintf("=== Source: %s (chunk %d) ===\n%s", chunk.Source, chunk.ChunkNumber, chunk.Content))
+		}
+		return strings.Join(results, "\n\n"), nil
 	}
 
 	var results []string

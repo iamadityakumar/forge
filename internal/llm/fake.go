@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"crypto/sha256"
 	"strconv"
 	"sync"
 	"time"
@@ -9,6 +10,25 @@ import (
 	"forge/internal/clock"
 	"sync/atomic"
 )
+
+type FakeEmbeddingBackend struct{ dimensions int }
+
+func NewFakeEmbeddingBackend(dimensions int) *FakeEmbeddingBackend {
+	if dimensions <= 0 {
+		dimensions = 768
+	}
+	return &FakeEmbeddingBackend{dimensions: dimensions}
+}
+func (f *FakeEmbeddingBackend) Name() string    { return "fake-embedding" }
+func (f *FakeEmbeddingBackend) Dimensions() int { return f.dimensions }
+func (f *FakeEmbeddingBackend) Embed(_ context.Context, text string) ([]float32, error) {
+	vector := make([]float32, f.dimensions)
+	seed := sha256.Sum256([]byte(text))
+	for i := range vector {
+		vector[i] = float32(seed[i%len(seed)]) / 255.0
+	}
+	return vector, nil
+}
 
 type FakeBackend struct {
 	calls        int32

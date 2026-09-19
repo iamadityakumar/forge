@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,58 @@ import (
 type PgStore struct {
 	db  *sql.DB
 	clk clock.Clock
+}
+
+type KBChunk struct {
+	ID          uuid.UUID
+	Source      string
+	ChunkNumber int
+	Content     string
+}
+
+func vectorLiteral(vector []float32) string {
+	parts := make([]string, len(vector))
+	for i, value := range vector {
+		parts[i] = strconv.FormatFloat(float64(value), 'g', -1, 32)
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
+
+func (s *PgStore) UpsertKBChunk(ctx context.Context, source string, chunkNumber int, content string, embedding []float32) error {
+	if len(embedding) != 768 {
+		return fmt.Errorf("embedding dimension %d does not match database dimension 768", len(embedding))
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kb_chunks (source, chunk_number, content, embedding) VALUES ($1, $2, $3, $4::vector) ON CONFLICT (source, chunk_number) DO UPDATE SET content = EXCLUDED.content, embedding = EXCLUDED.embedding`, source, chunkNumber, content, vectorLiteral(embedding))
+	if err != nil {
+		return fmt.Errorf("upsert kb chunk: %w", err)
+	}
+	return nil
+}
+
+func (s *PgStore) SearchKB(ctx context.Context, embedding []float32, limit int) ([]KBChunk, error) {
+	if len(embedding) != 768 {
+		return nil, fmt.Errorf("embedding dimension %d does not match database dimension 768", len(embedding))
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, source, chunk_number, content FROM kb_chunks ORDER BY embedding <=> $1::vector LIMIT $2`, vectorLiteral(embedding), limit)
+	if err != nil {
+		return nil, fmt.Errorf("search kb: %w", err)
+	}
+	defer rows.Close()
+	var chunks []KBChunk
+	for rows.Next() {
+		var chunk KBChunk
+		if err := rows.Scan(&chunk.ID, &chunk.Source, &chunk.ChunkNumber, &chunk.Content); err != nil {
+			return nil, fmt.Errorf("scan kb chunk: %w", err)
+		}
+		chunks = append(chunks, chunk)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate kb chunks: %w", err)
+	}
+	return chunks, nil
 }
 
 func NewPgStore(databaseURL string, opts ...func(*PgStore)) (*PgStore, error) {

@@ -1,0 +1,53 @@
+{
+  "provider": "groq",
+  "measurements": [
+    {
+      "model": "qwen/qwen3.8-27b",
+      "mode": "without_retrieval",
+      "latency_seconds": 0.7863308999949368,
+      "prompt_tokens": 21,
+      "completion_tokens": 256,
+      "tokens_per_second": 325.5626861435159,
+      "pass": null
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "mode": "without_retrieval",
+      "latency_seconds": 0.7630498000071384,
+      "prompt_tokens": 21,
+      "completion_tokens": 256,
+      "tokens_per_second": 335.49579594622145,
+      "pass": null
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "mode": "with_retrieval",
+      "latency_seconds": 0.7295376999973087,
+      "prompt_tokens": 56,
+      "completion_tokens": 256,
+      "tokens_per_second": 350.90715668421853,
+      "pass": null
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "mode": "with_retrieval",
+      "latency_seconds": 0.7931951999926241,
+      "prompt_tokens": 56,
+      "completion_tokens": 256,
+      "tokens_per_second": 322.7452712804875,
+      "pass": null
+    }
+  ],
+  "summary": {
+    "qwen/qwen3.8-27b:with_retrieval": {
+      "p50_latency_seconds": 0.7613664499949664,
+      "p95_latency_seconds": 0.7295376999973087,
+      "runs": 2
+    },
+    "qwen/qwen3.8-27b:without_retrieval": {
+      "p50_latency_seconds": 0.7746903500010376,
+      "p95_latency_seconds": 0.7630498000071384,
+      "runs": 2
+    }
+  }
+}
