@@ -99,7 +99,6 @@ func computeBackoff(attempt int) time.Duration {
 }
 
 func retryTransient(ctx context.Context, maxRetries int, do func() (CompleteResponse, error)) (CompleteResponse, error) {
-	var lastErr error
 	normalRetries := 0
 	attempt := 0 // for backoff
 	for {
@@ -112,7 +111,6 @@ func retryTransient(ctx context.Context, maxRetries int, do func() (CompleteResp
 			return resp, nil
 		}
 
-		lastErr = err
 		transient, retryAfter := isTransientErr(err)
 
 		var httpErr *HTTPError
@@ -139,7 +137,6 @@ func retryTransient(ctx context.Context, maxRetries int, do func() (CompleteResp
 			return CompleteResponse{}, ctx.Err()
 		}
 	}
-	return CompleteResponse{}, lastErr
 }
 
 func NewFromEnv() (LLMBackend, error) {
