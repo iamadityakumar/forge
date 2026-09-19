@@ -22,6 +22,7 @@
 - [Quickstart & Local Setup](#-quickstart--local-setup)
 - [Deployment (Oracle Cloud Always Free)](#-deployment-oracle-cloud-always-free)
 - [Testing & Invariant Verification](#-testing--invariant-verification)
+- [RAG Knowledge Base, Evaluation & Benchmarking](#-rag-knowledge-base-evaluation--benchmarking)
 - [Repository Structure](#-repository-structure)
 
 ---
@@ -275,18 +276,42 @@ go test -v ./internal/worker/ -run TestChaos
 
 ---
 
-## 🔎 RAG Evaluation & Benchmarking
+## 🔎 RAG Knowledge Base, Evaluation & Benchmarking
 
-The retrieval implementation and its remaining measurement work are tracked
-in [`ragplan.md`](ragplan.md). The evaluation dataset is deliberately small,
-reviewable, and executable rather than generated from unverified model output.
+Forge includes a retrieval-augmented generation path for the competitive
+programming agent. The knowledge base is stored in Markdown under
+[`internal/tools/kb`](internal/tools/kb), and the same `search_kb` tool works
+with either the production vector path or an offline fallback.
+
+### RAG implementation
+
+1. `cmd/ingest` reads Markdown files, splits them into 1,200-character chunks
+   with 200 characters of overlap, embeds each chunk with Ollama
+   (`nomic-embed-text` by default), and upserts it into PostgreSQL.
+2. Migration `000008_kb_chunks` creates `kb_chunks` with a 768-dimensional
+   `pgvector` column, a uniqueness constraint on `(source, chunk_number)`, and
+   an HNSW cosine index.
+3. `llm.EmbeddingBackend` abstracts embeddings. The repository provides the
+   Ollama implementation for live ingestion and a deterministic fake backend
+   for tests.
+4. `search_kb` embeds the query, runs cosine-distance nearest-neighbor search,
+   and returns the top five chunks with source and chunk metadata. Retrieval
+   latency is recorded in the Prometheus metric
+   `forge_retrieval_latency_seconds`.
+5. If PostgreSQL or an embedding backend is not configured, `search_kb` falls
+   back to case-insensitive keyword matching over embedded Markdown files. This
+   keeps agent and unit tests runnable offline; production workers use vectors.
+
+Current follow-ups are to record embedding calls in `llm_calls` with
+latency/token metadata and to add a dedicated retrieval trace span. Retrieval
+is currently visible in the tool-call step and latency is already exported.
 
 ```bash
 # Start PostgreSQL with pgvector, apply migrations, and ingest the KB.
 docker compose up -d postgres
 go run ./cmd/ingest -dir internal/tools/kb
 
-# Run the retrieval/task evaluation and write a JSON artifact.
+# Run the retrieval/task evaluation and write a JSON artifact after Ollama is ready.
 go run ./cmd/rag-eval --output eval-results.json
 
 # Benchmark local Ollama models. Retrieval context is supplied explicitly.
@@ -298,19 +323,42 @@ python scripts/rag_benchmark.py --models llama3.1 qwen2.5:3b \
 Recall@k counts a query as recovered when its labeled source appears in the
 first k results; MRR is the reciprocal rank of the first relevant source.
 Pass rate is the fraction of dataset programs whose supplied tests pass.
-The benchmark writes measured latency and token fields only after Ollama is
-available. Model pass rate remains `null` in this generic chat runner because
-it does not pretend that arbitrary prose is executable code; use the dataset
-runner for executable task pass rate. The repository does not invent
-performance numbers.
+The evaluator reports Recall@1/3/5, MRR, and executable task pass rate. Recall@k
+is the fraction of labeled queries whose expected source appears in the first
+k results; MRR is the mean reciprocal rank of the first relevant result. The
+evaluator fails explicitly when PostgreSQL, pgvector, or Ollama is unavailable.
+No live vector-evaluation artifact is checked in because the embedding service
+was unavailable for the recorded environment run; the repository does not
+invent recall or pass-rate numbers. The benchmark writes measured latency and
+token fields only after its provider is available.
 
-Measured Groq run: `qwen/qwen3.8-27b`, two runs per condition, 256-token cap,
-and 12-second request spacing. Without retrieval, p50 latency was `0.775s`
-and mean throughput `330.5 tokens/s`. With retrieval, p50 latency was
-`0.761s` and mean throughput `336.8 tokens/s`. Pass rate is not applicable to
-the generic prose prompt. Raw output is in
-`groq-qwen3.8-27b-rag-benchmark.json`; full status and remaining work are in
-[`ragplan.md`](ragplan.md).
+### Recorded Groq benchmark
+
+The checked-in artifact
+[`groq-qwen3.8-27b-rag-benchmark.json`](groq-qwen3.8-27b-rag-benchmark.json)
+was produced with `qwen/qwen3.8-27b`, two requests per condition, a
+256-token completion cap, and 12 seconds between requests:
+
+| Prompt condition | p50 latency | mean throughput | runs |
+| --- | ---: | ---: | ---: |
+| Without retrieval | 0.775s | 330.5 tokens/s | 2 |
+| With retrieval | 0.761s | 336.8 tokens/s | 2 |
+
+The run used four requests, 1,024 completion tokens, and 154 prompt tokens in
+total. This is a small latency/token measurement, not a statistically
+definitive model comparison. `pass` is `null` because this generic prompt
+benchmark produces prose rather than executable programs; executable task pass
+rate belongs to `cmd/rag-eval`.
+
+To reproduce the provider run, keep the API key outside tracked files:
+
+```powershell
+$env:GROQ_API_KEY = '<key supplied outside tracked files>'
+python scripts/rag_benchmark.py --provider groq --models qwen/qwen3.8-27b `
+  --retrieval 'Prefix sums answer static range sums in O(1) after O(N) preprocessing.' `
+  --runs 2 --max-completion-tokens 256 --delay-seconds 12 `
+  --output groq-qwen3.8-27b-rag-benchmark.json
+```
 
 ---
 
