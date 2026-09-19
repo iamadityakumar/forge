@@ -75,11 +75,11 @@ flowchart TD
         Sandbox["Tool Sandbox (run_tests, kb_search)"]
     end
 
-    Client -->|POST /jobs\nGET /jobs/{id}\nGET /dashboard| API
+    Client -->|Job API requests| API
     API --> Admission
     Admission -->|INSERT| JobsTable
     
-    W1 & W2 & WN -->|SELECT ... FOR UPDATE SKIP LOCKED\nClaim & Reclaim| JobsTable
+    W1 & W2 & WN -->|Claim and reclaim with row locks| JobsTable
     W1 & W2 & WN -->|Fenced Checkpoint Commits| StepsTable
     W1 & W2 & WN -->|Record Heartbeat| WorkersTable
     W1 & W2 & WN -->|LLM Calls & Spend Audit| LLMCallsTable
@@ -87,7 +87,7 @@ flowchart TD
     W1 & W2 & WN --> RateLimiter
     RateLimiter --> Groq
     W1 & W2 & WN --> Sandbox
-    Proxy -->|Scrape /metrics| W1 & W2 & WN
+    Proxy -->|Scrape metrics| W1 & W2 & WN
 ```
 
 ---
