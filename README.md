@@ -121,20 +121,20 @@ sequenceDiagram
     participant W2 as Worker 2 (Reclaimer)
 
     W1->>DB: Atomic Claim (leases job, epoch=1)
-    W1->>LLM: Complete(prompt) -> Plan (Thought, Action: "tool", Tool: "kb_search")
-    W1->>DB: Checkpoint Step 1 (type: "plan", epoch: 1)
-    W1->>W1: Execute kb_search("binary search")
-    W1->>DB: Checkpoint Step 2 (type: "tool_call", epoch: 1)
+    W1->>LLM: Complete prompt and receive a tool plan
+    W1->>DB: Checkpoint step 1 as plan at epoch 1
+    W1->>W1: Execute knowledge base search
+    W1->>DB: Checkpoint step 2 as tool call at epoch 1
     
     Note over W1: 💥 SIGKILL / kill -9 on Worker 1!
-    Note over DB: Worker 1 heartbeat ceases; lease_expires_at passes
+    Note over DB: Worker 1 heartbeat stops and the lease expires
 
-    W2->>DB: Reclaim Expired Job (leases job, epoch=2)
-    W2->>DB: Load committed job_steps (Steps 1 & 2 retrieved)
-    Note over W2: Reconstructs LLM chat history without re-spending tokens!
-    W2->>LLM: Complete(history + observation) -> Plan (Action: "finish")
-    W2->>DB: Checkpoint Step 3 (type: "plan", epoch: 2)
-    W2->>DB: CompleteJob(id, epoch=2) -> status="completed"
+    W2->>DB: Reclaim expired job at epoch 2
+    W2->>DB: Load committed steps 1 and 2
+    Note over W2: Rebuild chat history without replaying committed work
+    W2->>LLM: Complete history and receive finish plan
+    W2->>DB: Checkpoint step 3 as plan at epoch 2
+    W2->>DB: Complete job at epoch 2
 ```
 
 ### The Invariant Guarantee
