@@ -55,7 +55,14 @@ forge-implementation-plan.md
 FORGE_COMPLETE_BUILD_PLAN.md
 ragplan.md
 
-
+# Python (Phase 1 LangGraph agent)
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.stackdump
+python/langgraph_agent/.venv/
+python/langgraph_agent/.pytest_cache/
 
 # Local notes / memory / graph artifacts (not part of the deployable app)
 graphify-out/

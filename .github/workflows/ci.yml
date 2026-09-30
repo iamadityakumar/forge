@@ -110,3 +110,22 @@ jobs:
         # reclaim/step race. Default seed is fixed (a red run is reproducible); to
         # widen the fuzz surface across CI runs, set CHAOS_SEED in this step's env.
         run: go test -race -count=5 ./internal/worker/... ./internal/sim/...
+
+  python-langgraph:
+    name: python langgraph agent
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python/langgraph_agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+
+      - name: Sync and test
+        run: |
+          uv sync --extra dev --frozen
+          uv run pytest

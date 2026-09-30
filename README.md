@@ -276,6 +276,27 @@ go test -v ./internal/worker/ -run TestChaos
 
 ---
 
+## Experimental Python LangGraph Agent (Phase 1)
+
+This is a **standalone** LangGraph prototype under [`python/langgraph_agent`](python/langgraph_agent). It is **not** wired to Forge workers, leases, Postgres checkpoints, MCP, or the `cp_solve` handler. The five-node graph (`plan → kb_search → write_solution → run_tests → verify`) uses Python fake knowledge-base and test adapters so routing can be tested deterministically. Production jobs still run through the Go agent in `internal/agent`.
+
+```bash
+cd python/langgraph_agent
+uv sync --extra dev
+
+# Offline fake LLM; fail once, then pass on retry
+uv run forge-langgraph-agent --llm fake --task "Solve two sum" --test-outcomes fail,pass
+
+# Optional live Groq smoke test (not used in CI)
+GROQ_API_KEY=... uv run forge-langgraph-agent --llm groq --task "Solve two sum"
+
+uv run pytest
+```
+
+The graph stops after a passing test or three failed attempts (`recursion_limit=12` is a second guard). CI runs the fake pytest suite only; it does not call Groq.
+
+---
+
 ## 🔎 RAG Knowledge Base, Evaluation & Benchmarking
 
 Forge includes a retrieval-augmented generation path for the competitive
@@ -314,51 +335,49 @@ go run ./cmd/ingest -dir internal/tools/kb
 # Run the retrieval/task evaluation and write a JSON artifact after Ollama is ready.
 go run ./cmd/rag-eval --output eval-results.json
 
-# Benchmark local Ollama models. Retrieval context is supplied explicitly.
-python scripts/rag_benchmark.py --models llama3.1 qwen2.5:3b \
+# Benchmark local Ollama models (five runs per condition).
+python scripts/rag_benchmark.py --models qwen2.5:3b llama3.2:1b --runs 5 \
   --retrieval "Prefix sums answer static range sums in O(1) after O(N) preprocessing." \
   --output rag-benchmark.json
 ```
 
-Recall@k counts a query as recovered when its labeled source appears in the
-first k results; MRR is the reciprocal rank of the first relevant source.
-Pass rate is the fraction of dataset programs whose supplied tests pass.
-The evaluator reports Recall@1/3/5, MRR, and executable task pass rate. Recall@k
-is the fraction of labeled queries whose expected source appears in the first
-k results; MRR is the mean reciprocal rank of the first relevant result. The
-evaluator fails explicitly when PostgreSQL, pgvector, or Ollama is unavailable.
-No live vector-evaluation artifact is checked in because the embedding service
-was unavailable for the recorded environment run; the repository does not
-invent recall or pass-rate numbers. The benchmark writes measured latency and
-token fields only after its provider is available.
+Recall@k is the fraction of labeled queries whose expected source appears in
+the first k results. MRR is the mean reciprocal rank of the first relevant
+result. Task pass rate is the fraction of dataset programs whose supplied tests
+pass. The evaluator writes the measured result to [`eval-results.json`](eval-results.json).
 
-### Recorded Groq benchmark
+### Local RAG results
 
-The checked-in artifact
-[`groq-qwen3.8-27b-rag-benchmark.json`](groq-qwen3.8-27b-rag-benchmark.json)
-was produced with `qwen/qwen3.8-27b`, two requests per condition, a
-256-token completion cap, and 12 seconds between requests:
+These artifacts were generated locally with PostgreSQL/pgvector and Ollama:
+[`eval-results.json`](eval-results.json) and
+[`rag-benchmark.json`](rag-benchmark.json).
 
-| Prompt condition | p50 latency | mean throughput | runs |
+Hardware: CPU-only Ollama inference in Docker on the local Windows development
+machine; no GPU was used.
+
+| Evaluation | Result |
+| --- | ---: |
+| Recall@1 (39 queries) | 92.31% |
+| Recall@3 (39 queries) | 97.44% |
+| Recall@5 (39 queries) | 100.00% |
+| MRR (39 queries) | 0.9573 |
+| Executable task pass rate (30 tasks) | 100.00% |
+
+The benchmark used five runs for each retrieval condition per model. Values are
+median end-to-end latency on this CPU machine:
+
+| Model | Without retrieval | With retrieval | Runs/condition |
 | --- | ---: | ---: | ---: |
-| Without retrieval | 0.775s | 330.5 tokens/s | 2 |
-| With retrieval | 0.761s | 336.8 tokens/s | 2 |
+| `qwen2.5:3b` | 102.52s | 73.48s | 5 |
+| `llama3.2:1b` | 83.12s | 38.44s | 5 |
 
-The run used four requests, 1,024 completion tokens, and 154 prompt tokens in
-total. This is a small latency/token measurement, not a statistically
-definitive model comparison. `pass` is `null` because this generic prompt
-benchmark produces prose rather than executable programs; executable task pass
-rate belongs to `cmd/rag-eval`.
-
-To reproduce the provider run, keep the API key outside tracked files:
-
-```powershell
-$env:GROQ_API_KEY = '<key supplied outside tracked files>'
-python scripts/rag_benchmark.py --provider groq --models qwen/qwen3.8-27b `
-  --retrieval 'Prefix sums answer static range sums in O(1) after O(N) preprocessing.' `
-  --runs 2 --max-completion-tokens 256 --delay-seconds 12 `
-  --output groq-qwen3.8-27b-rag-benchmark.json
-```
+The benchmark measures latency and token throughput for a generic explanation
+prompt; it does not measure executable-answer correctness (`pass` is `null`).
+Completion length is not fixed by the benchmark: Ollama stops naturally, so
+latency differences also reflect the number of completion tokens generated.
+The live `cp_solve` check also completed successfully: job
+`f588bbbf-8f51-4d12-93ef-e4dadd13e252` recorded a `search_kb` tool step whose
+output contained `kb/prefix_sum.md` and the prefix-sum formula.
 
 ---
 
@@ -382,6 +401,8 @@ forge/
 │   ├── trace/                 # OpenTelemetry tracing wrapper & W3C propagator
 │   └── worker/                # Worker lifecycle, fencing tokens & claim manager
 ├── migrations/                # Versioned SQL migration scripts (000001 - 000007)
+├── python/
+│   └── langgraph_agent/       # Isolated Phase-1 LangGraph CLI (not wired to workers)
 ├── web/                       # Zero-dependency vanilla HTML/JS dark-mode dashboard
 ├── docs/                      # Deployment runbooks, demo scripts & troubleshooting guides
 └── scripts/                   # Automated demo scripts & chaos verification suites

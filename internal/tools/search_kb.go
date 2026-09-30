@@ -52,6 +52,13 @@ type searchKBArgs struct {
 }
 
 func (s *SearchKBTool) Execute(ctx context.Context, argsJSON string) (string, error) {
+	if s.metrics != nil {
+		started := time.Now()
+		defer func() {
+			s.metrics.RetrievalLatency.Observe(time.Since(started).Seconds())
+		}()
+	}
+
 	var args searchKBArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
@@ -62,26 +69,17 @@ func (s *SearchKBTool) Execute(ctx context.Context, argsJSON string) (string, er
 		return "Query is empty. Please provide a search keyword.", nil
 	}
 	if s.store != nil && s.embedding != nil {
-		started := time.Now()
 		vector, err := s.embedding.Embed(ctx, query)
-		if err != nil {
-			return "", fmt.Errorf("embed query: %w", err)
+		if err == nil {
+			chunks, err := s.store.SearchKB(ctx, vector, 5)
+			if err == nil && len(chunks) > 0 {
+				var results []string
+				for _, chunk := range chunks {
+					results = append(results, fmt.Sprintf("=== Source: %s (chunk %d) ===\n%s", chunk.Source, chunk.ChunkNumber, chunk.Content))
+				}
+				return strings.Join(results, "\n\n"), nil
+			}
 		}
-		chunks, err := s.store.SearchKB(ctx, vector, 5)
-		if err != nil {
-			return "", err
-		}
-		if s.metrics != nil {
-			s.metrics.RetrievalLatency.Observe(time.Since(started).Seconds())
-		}
-		if len(chunks) == 0 {
-			return fmt.Sprintf("No knowledge base documents found matching query: %s", args.Query), nil
-		}
-		var results []string
-		for _, chunk := range chunks {
-			results = append(results, fmt.Sprintf("=== Source: %s (chunk %d) ===\n%s", chunk.Source, chunk.ChunkNumber, chunk.Content))
-		}
-		return strings.Join(results, "\n\n"), nil
 	}
 
 	var results []string

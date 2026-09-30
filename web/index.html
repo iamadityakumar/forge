@@ -3,10 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Forge � Live Observability Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <title>Forge — Live Observability Dashboard</title>
+  <meta name="description" content="Real-time observability dashboard for the Forge distributed job orchestration engine.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body>
+
+  <!-- ── App Header ──────────────────────────────────────── -->
   <header class="app-header">
     <div class="brand">
       <div class="brand-icon">F</div>
@@ -19,150 +25,319 @@
         <span id="statusText">System Healthy</span>
       </div>
       <div class="meta-info">
-        <div class="meta-item">DB: <span id="dbStatus">checking...</span></div>
-        <div class="meta-item">Workers Online: <span id="activeWorkersCount">0</span></div>
+        <div class="meta-item">DB: <span id="dbStatus">—</span></div>
+        <div class="meta-item">Workers: <span id="activeWorkersCount">0</span></div>
+        <div class="meta-item">RAG: <span id="ragEngineStatus">Active (pgvector)</span></div>
         <div class="meta-item">Uptime: <span id="uptimeText">0s</span></div>
       </div>
     </div>
   </header>
 
-  <main class="main-container">
-    <!-- Stat Tiles -->
-    <section class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-header">Jobs Submitted</div>
-        <div class="stat-value" id="statSubmitted">0</div>
-        <div class="stat-subtext">Total HTTP submissions</div>
-        <canvas id="sparklineSubmitted" class="sparkline-canvas" width="120" height="30" aria-label="Jobs submitted trend"></canvas>
-      </div>
-      <div class="stat-card">
-        <div class="stat-header">Completed</div>
-        <div class="stat-value" id="statCompleted" style="color: var(--accent-emerald);">0</div>
-        <div class="stat-subtext">Fenced success</div>
-        <canvas id="sparklineCompleted" class="sparkline-canvas" width="120" height="30" aria-label="Jobs completed trend"></canvas>
-      </div>
-      <div class="stat-card">
-        <div class="stat-header">Failed / Dead-Letter</div>
-        <div class="stat-value" id="statFailed" style="color: var(--accent-rose);">0</div>
-        <div class="stat-subtext">Poison messages</div>
-        <canvas id="sparklineFailed" class="sparkline-canvas" width="120" height="30" aria-label="Jobs failed trend"></canvas>
-      </div>
-      <div class="stat-card">
-        <div class="stat-header">Queue Backpressure</div>
-        <div class="stat-value" id="statPending" style="color: var(--accent-amber);">0</div>
-        <div class="stat-subtext">Pending jobs</div>
-        <canvas id="sparklinePending" class="sparkline-canvas" width="120" height="30" aria-label="Pending jobs trend"></canvas>
-      </div>
-      <div class="stat-card">
-        <div class="stat-header">Active Workers</div>
-        <div class="stat-value" id="statWorkers" style="color: var(--accent-indigo);">0</div>
-        <div class="stat-subtext">Heartbeating fleet</div>
-        <canvas id="sparklineWorkers" class="sparkline-canvas" width="120" height="30" aria-label="Active workers trend"></canvas>
-      </div>
-      <div class="stat-card">
-        <div class="stat-header">Rate Limit Waits</div>
-        <div class="stat-value" id="statWaits" style="color: var(--accent-purple);">0</div>
-        <div class="stat-subtext">Backpressure delays</div>
-        <canvas id="sparklineWaits" class="sparkline-canvas" width="120" height="30" aria-label="Rate limit waits trend"></canvas>
-      </div>
-    </section>
+  <!-- ── Page Body (Fixed Viewport Layout) ───────────────── -->
+  <div class="page-body">
+    <div class="main-container">
 
-    <!-- Worker Fleet Panel -->
-    <section class="card">
-      <div class="card-header">
-        <div class="card-title">
-          <span>Worker Fleet Status</span>
-        </div>
-      </div>
-      <div class="card-body">
-        <div class="workers-grid" id="workersGrid">
-          <div class="empty-state">Discovering workers...</div>
-        </div>
-      </div>
-    </section>
+      <!-- ── Stats Row (8 Columns Spanning Full Width) ───── -->
+      <section class="stats-grid" aria-label="Key metrics">
 
-    <!-- Metrics Charts Row -->
-    <section class="charts-grid">
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">Job Status Distribution</div>
-        </div>
-        <div class="card-body">
-          <div class="chart-container">
-            <canvas id="chartJobStatus"></canvas>
+        <div class="stat-card">
+          <div class="stat-header">
+            Jobs Submitted
+            <span class="stat-delta neu" id="deltaSubmitted">Total</span>
           </div>
+          <div class="stat-value" id="statSubmitted">0</div>
+          <div class="stat-subtext">Total HTTP submissions</div>
+          <canvas id="sparklineSubmitted" class="sparkline-canvas" width="160" height="24" aria-label="Jobs submitted trend"></canvas>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">Step Latency Histogram (Seconds)</div>
-        </div>
-        <div class="card-body">
-          <div class="chart-container">
-            <canvas id="chartStepDuration"></canvas>
+
+        <div class="stat-card">
+          <div class="stat-header">
+            Completed
+            <span class="stat-delta up" id="deltaCompleted">—</span>
           </div>
+          <div class="stat-value" id="statCompleted">0</div>
+          <div class="stat-subtext">Fenced success</div>
+          <canvas id="sparklineCompleted" class="sparkline-canvas" width="160" height="24" aria-label="Completed trend"></canvas>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">LLM Token Usage (Prompt vs Completion)</div>
-        </div>
-        <div class="card-body">
-          <div class="chart-container">
-            <canvas id="chartTokens"></canvas>
+
+        <div class="stat-card">
+          <div class="stat-header">
+            Failed / DLQ
+            <span class="stat-delta down" id="deltaFailed">—</span>
           </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Jobs Table & Live Trace Timeline -->
-    <section class="card">
-      <div class="card-header">
-        <div class="card-title">Recent Jobs & Live Step Timeline</div>
-      </div>
-      <div class="card-body">
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Job ID</th>
-                <th>Task Type</th>
-                <th>Status</th>
-                <th>Attempts</th>
-                <th>Claimed By</th>
-                <th>Created At</th>
-              </tr>
-            </thead>
-            <tbody id="jobsTableBody">
-              <tr>
-                <td colspan="6" class="empty-state">Loading jobs...</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="stat-value" id="statFailed">0</div>
+          <div class="stat-subtext">Poison messages</div>
+          <canvas id="sparklineFailed" class="sparkline-canvas" width="160" height="24" aria-label="Failed trend"></canvas>
         </div>
 
-        <div id="jobsPagination" class="pagination-container" aria-label="Jobs pagination"></div>
+        <div class="stat-card">
+          <div class="stat-header">
+            Backpressure
+            <span class="stat-delta neu" id="deltaPending">0 queued</span>
+          </div>
+          <div class="stat-value" id="statPending">0</div>
+          <div class="stat-subtext">Pending jobs</div>
+          <canvas id="sparklinePending" class="sparkline-canvas" width="160" height="24" aria-label="Pending trend"></canvas>
+        </div>
 
-        <div id="timelineContainer" style="display: none;" class="timeline-card">
-          <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-            <div style="font-weight: 600; font-size: 14px;">
-              Job Step Timeline: <span id="selectedJobId" class="code-pill"></span>
+        <div class="stat-card">
+          <div class="stat-header">
+            Active Workers
+            <span class="stat-delta up" id="deltaWorkers">4/4 Online</span>
+          </div>
+          <div class="stat-value" id="statWorkers">0</div>
+          <div class="stat-subtext">Heartbeating fleet</div>
+          <canvas id="sparklineWorkers" class="sparkline-canvas" width="160" height="24" aria-label="Workers trend"></canvas>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-header">
+            Rate Limit Waits
+            <span class="stat-delta neu" id="deltaWaits">0 delay</span>
+          </div>
+          <div class="stat-value" id="statWaits">0</div>
+          <div class="stat-subtext">Backpressure delays</div>
+          <canvas id="sparklineWaits" class="sparkline-canvas" width="160" height="24" aria-label="Rate waits trend"></canvas>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-header">
+            RAG Searches
+            <span class="stat-delta up" id="deltaRAG">pgvector</span>
+          </div>
+          <div class="stat-value" id="statRAG">0</div>
+          <div class="stat-subtext">Vector &amp; strategy hits</div>
+          <canvas id="sparklineRAG" class="sparkline-canvas" width="160" height="24" aria-label="RAG trend"></canvas>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-header">
+            RAG Latency
+            <span class="stat-delta neu" id="deltaRAGLatency">&lt;10ms</span>
+          </div>
+          <div class="stat-value" id="statRAGLatency">0ms</div>
+          <div class="stat-subtext">Avg retrieval duration</div>
+          <canvas id="sparklineRAGLatency" class="sparkline-canvas" width="160" height="24" aria-label="RAG latency trend"></canvas>
+        </div>
+
+      </section>
+
+      <!-- ── Left Column: Workers + System Telemetry ────── -->
+      <aside class="workers-panel" aria-label="Worker fleet and system telemetry">
+        
+        <!-- Upper Card: Worker Fleet -->
+        <div class="panel-section worker-fleet-section">
+          <div class="panel-header">
+            <div class="panel-title">
+              <span class="live-dot"></span>
+              Worker Fleet
             </div>
-            <div style="display: flex; align-items: center; gap: 12px;">
-              <div id="reclaimNotice" style="font-size: 12px; color: var(--accent-indigo); display: none;">
-                ? Cross-worker resumption detected across multiple workers!
+            <span class="panel-badge">4 Nodes</span>
+          </div>
+          <div class="panel-body">
+            <div class="workers-grid" id="workersGrid">
+              <div class="empty-state">Discovering workers…</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lower Card: Infrastructure Telemetry (Fills bottom of left col, eliminates empty space) -->
+        <div class="panel-section infra-section">
+          <div class="panel-header">
+            <div class="panel-title">
+              <span class="live-dot"></span>
+              Engine Telemetry
+            </div>
+            <span class="panel-badge">Distributed</span>
+          </div>
+          <div class="panel-body infra-body">
+            <div class="infra-metric-row">
+              <span class="infra-label">PostgreSQL Node</span>
+              <span class="infra-val mono">pgvector · port 5432</span>
+            </div>
+            <div class="infra-metric-row">
+              <span class="infra-label">Orchestrator Core</span>
+              <span class="infra-val mono">Go 1.22 · port 8080</span>
+            </div>
+            <div class="infra-metric-row">
+              <span class="infra-label">Queue Lock Strategy</span>
+              <span class="infra-val mono">SKIP LOCKED · 10s lease</span>
+            </div>
+            <div class="infra-metric-row">
+              <span class="infra-label">Concurrency Model</span>
+              <span class="infra-val mono">Bounded (1x/worker)</span>
+            </div>
+            <div class="infra-metric-row">
+              <span class="infra-label">Vector Index</span>
+              <span class="infra-val mono">HNSW Cosine 1536-dim</span>
+            </div>
+            <div class="infra-metric-row">
+              <span class="infra-label">Crash Resilience</span>
+              <span class="infra-val mono">Fenced Handoff (kill -9)</span>
+            </div>
+            <div class="infra-metric-row">
+              <span class="infra-label">Observability Stack</span>
+              <span class="infra-val mono">OTel + Slog Spans</span>
+            </div>
+          </div>
+        </div>
+
+      </aside>
+
+      <!-- ── Center Column: 2×2 Charts Grid ─────────────── -->
+      <main class="charts-panel" aria-label="Metrics charts">
+
+        <div class="chart-card">
+          <div class="panel-header">
+            <div class="panel-title">Job Status Distribution</div>
+            <span class="panel-badge" id="chartStatusTotal">75 Jobs</span>
+          </div>
+          <div class="panel-body">
+            <div class="chart-container">
+              <canvas id="chartJobStatus"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="panel-header">
+            <div class="panel-title">Step Latency Histogram</div>
+            <span class="panel-badge">Duration (s)</span>
+          </div>
+          <div class="panel-body">
+            <div class="chart-container">
+              <canvas id="chartStepDuration"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="panel-header">
+            <div class="panel-title">LLM Token Consumption</div>
+            <span class="panel-badge">Prompt vs Comp</span>
+          </div>
+          <div class="panel-body">
+            <div class="chart-container">
+              <canvas id="chartTokens"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="panel-header">
+            <div class="panel-title">
+              <span class="live-dot"></span>
+              RAG Retrieval Latency
+            </div>
+            <span class="panel-badge">Vector Search</span>
+          </div>
+          <div class="panel-body">
+            <div class="chart-container">
+              <canvas id="chartRAGPipeline"></canvas>
+            </div>
+          </div>
+        </div>
+
+      </main>
+
+      <!-- ── Right Column: Job Stream + Execution Inspector  -->
+      <section class="jobs-panel" aria-label="Recent jobs and execution timeline">
+        
+        <!-- Upper Card: Job Stream Table -->
+        <div class="panel-section jobs-table-section">
+          <div class="panel-header">
+            <div class="panel-title">
+              <span class="live-dot"></span>
+              Job Stream
+            </div>
+            <span class="panel-badge">5s refresh</span>
+          </div>
+
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Job ID</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Att.</th>
+                  <th>Worker</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody id="jobsTableBody">
+                <tr>
+                  <td colspan="6" class="empty-state">Loading jobs…</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div id="jobsPagination" class="pagination-container" aria-label="Jobs pagination"></div>
+        </div>
+
+        <!-- Lower Card: Execution Trace Inspector (Fills bottom of right col, eliminates empty space) -->
+        <div class="panel-section inspector-section">
+          
+          <!-- When NO job is selected, this placeholder is shown -->
+          <div id="inspectorDefaultState" class="inspector-default-card">
+            <div class="panel-header">
+              <div class="panel-title">
+                <span class="live-dot"></span>
+                Job Trace Inspector
               </div>
-              <a id="jaegerLink" href="#" target="_blank" rel="noopener" style="display: none; font-size: 12px; color: var(--accent-indigo); text-decoration: none; padding: 4px 8px; border: 1px solid var(--accent-indigo); border-radius: 4px; background: rgba(99, 102, 241, 0.1); transition: all 0.2s;">?? View in Jaeger</a>
+              <span class="panel-badge">Interactive</span>
+            </div>
+            <div class="inspector-empty-body">
+              <div class="inspector-guidance">
+                <div class="inspector-icon">⬡</div>
+                <div class="inspector-headline">Select a Job to Trace</div>
+                <div class="inspector-sub">Click any row in the Job Stream to inspect its DAG step execution timeline, tool invocations, token costs, and Jaeger OTel spans.</div>
+              </div>
+              <div class="inspector-quick-metrics">
+                <div class="quick-metric">
+                  <span class="qm-label">Latest Claim</span>
+                  <span class="qm-val">worker-4</span>
+                </div>
+                <div class="quick-metric">
+                  <span class="qm-label">Avg Duration</span>
+                  <span class="qm-val">~155s</span>
+                </div>
+                <div class="quick-metric">
+                  <span class="qm-label">Lease Epoch</span>
+                  <span class="qm-val">Epoch 1-2</span>
+                </div>
+              </div>
             </div>
           </div>
-          <div class="timeline" id="stepTimeline"></div>
-          <div id="llmCallsContainer" class="llm-calls-panel" style="margin-top: 24px; display: none;"></div>
+
+          <!-- When a job IS selected, timelineContainer is displayed -->
+          <div id="timelineContainer" style="display:none;" class="timeline-card">
+            <div class="panel-header timeline-header">
+              <div class="panel-title">
+                <span class="live-dot"></span>
+                Trace — <span id="selectedJobId" class="code-pill"></span>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <div id="reclaimNotice" style="display:none;">⚡ Resumed</div>
+                <a id="jaegerLink" href="#" target="_blank" rel="noopener" style="display:none;">Jaeger</a>
+                <button id="closeTimelineBtn" class="close-timeline-btn" title="Close inspector">✕</button>
+              </div>
+            </div>
+            <div class="timeline-body">
+              <div class="timeline" id="stepTimeline"></div>
+              <div id="llmCallsContainer" class="llm-calls-panel" style="display:none;"></div>
+            </div>
+          </div>
+
         </div>
-      </div>
-    </section>
-  </main>
+
+      </section>
+
+    </div><!-- .main-container -->
+  </div><!-- .page-body -->
 
   <script src="/static/vendor/chart.umd.js"></script>
-  <script src="/static/dashboard.js?v=3"></script>
+  <script src="/static/dashboard.js?v=8"></script>
 </body>
 </html>
